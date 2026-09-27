@@ -1,0 +1,51 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users
+    match /users/{userId} {
+      allow read, write: if request.auth != null
+          && request.auth.uid == userId;
+    }
+
+    // Recycler data
+    // App users can only read recycler information.
+    match /recyclers/{recyclerId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Market rates
+    // Anyone can read market rates.
+    match /market_rates/{rateId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Transactions
+    // Login is NOT required to create a transaction.
+    // Only create is allowed from the app.
+    match /transactions/{transactionId} {
+      allow create: if
+          request.resource.data.keys().hasAll([
+            'material',
+            'city',
+            'weight',
+            'estimatedValue'
+          ])
+          && request.resource.data.weight is number
+          && request.resource.data.estimatedValue is number
+          && request.resource.data.weight > 0
+          && request.resource.data.estimatedValue >= 0;
+
+      // No public reading/modifying/deleting of transactions.
+      allow read, update, delete: if false;
+    }
+
+    // Everything else denied
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

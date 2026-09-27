@@ -1,20 +1,123 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_ai/firebase_ai.dart';
 import 'package:image_picker/image_picker.dart';
-
 import 'firebase_options.dart';
+import 'dart:typed_data';
+import 'upload_recyclers.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'offline_storage.dart';
+// ============================================================
+// AUTO SYNC PENDING TRANSACTIONS
+// ============================================================
 
+Future<void> syncPendingTransactions() async {
+  try {
+    final pendingTransactions =
+        await OfflineStorage.getPendingTransactions();
+
+    if (pendingTransactions.isEmpty) {
+      return;
+    }
+
+    for (final transaction
+        in pendingTransactions) {
+      try {
+        final transactionId =
+            transaction['transactionId']
+                ?.toString();
+
+        if (transactionId == null ||
+            transactionId.isEmpty) {
+          continue;
+        }
+
+        // ================================================
+        // UPLOAD TO FIRESTORE
+        // ================================================
+
+        await FirebaseFirestore.instance
+            .collection('transactions')
+            .doc(transactionId)
+            .set({
+          'transactionId':
+              transaction['transactionId'],
+
+          'lotId':
+              transaction['lotId'],
+
+          'material':
+              transaction['material'],
+
+          'weight':
+              transaction['weight'],
+
+          'rate':
+              transaction['rate'],
+
+          'estimatedValue':
+              transaction['estimatedValue'],
+
+          'recyclerId':
+              transaction['recyclerId'],
+
+          'recyclerName':
+              transaction['recyclerName'],
+
+          'recyclerCity':
+              transaction['recyclerCity'],
+
+          'status':
+              transaction['status'],
+
+          'handoverDateTime':
+              Timestamp.fromDate(
+            DateTime.parse(
+              transaction[
+                  'handoverDateTime'],
+            ),
+          ),
+
+          'createdAt':
+              FieldValue.serverTimestamp(),
+        });
+
+        // ================================================
+        // REMOVE FROM LOCAL PENDING LIST
+        // ================================================
+
+        await OfflineStorage
+            .removePendingTransaction(
+          transactionId,
+        );
+      } catch (_) {
+        // If one transaction fails,
+        // keep it locally for the next sync.
+        continue;
+      }
+    }
+  } catch (_) {
+    // No action needed.
+    // Pending data remains safely stored.
+  }
+}
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+// await FirebaseAppCheck.instance.activate(
+  //  providerAndroid: const AndroidDebugProvider(),
+//  );
+  // ========================================================
+  // SYNC PENDING OFFLINE TRANSACTIONS
+  // ========================================================
+
+  await syncPendingTransactions();
 
   runApp(const KabadiwalaConnectApp());
 }
@@ -43,7 +146,17 @@ class KabadiwalaConnectApp extends StatelessWidget {
     );
   }
 }
+// ============================================================
+// LANGUAGE SYSTEM
+// ============================================================
 
+class AppLanguage {
+  static bool isHindi = false;
+
+  static String get(String english, String hindi) {
+    return isHindi ? hindi : english;
+  }
+}
 // ============================================================
 // CONSTANTS
 // ============================================================
@@ -82,7 +195,7 @@ class _SplashScreenState extends State<SplashScreen> {
   Navigator.pushReplacement(
     context,
     MaterialPageRoute(
-      builder: (_) => const LoginScreen(),
+      builder: (_) => const HomeScreen(),
     ),
   );
 }
@@ -137,443 +250,6 @@ class _SplashScreenState extends State<SplashScreen> {
     );
   }
 }
-
-// ============================================================
-// LOGIN SCREEN
-// ============================================================
-
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
-
-  @override
-  State<LoginScreen> createState() => _LoginScreenState();
-}
-
-class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController phoneController = TextEditingController();
-
-  bool loading = false;
-
-  Future<void> sendOTP() async {
-    String phone = phoneController.text.trim();
-
-    if (phone.length != 10) {
-      showMessage('Please enter a valid 10-digit mobile number.');
-      return;
-    }
-
-    setState(() {
-      loading = true;
-    });
-
-    final fullPhone = '+91$phone';
-
-    try {
-      await FirebaseAuth.instance.verifyPhoneNumber(
-        phoneNumber: fullPhone,
-
-        verificationCompleted: (PhoneAuthCredential credential) async {
-          try {
-            await FirebaseAuth.instance.signInWithCredential(credential);
-          } catch (e) {
-            debugPrint('Automatic verification error: $e');
-          }
-        },
-
-        verificationFailed: (FirebaseAuthException e) {
-          if (!mounted) return;
-
-          setState(() {
-            loading = false;
-          });
-
-          showMessage(
-            e.message ?? 'OTP could not be sent.',
-          );
-        },
-
-        codeSent: (String verificationId, int? resendToken) {
-          if (!mounted) return;
-
-          setState(() {
-            loading = false;
-          });
-
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => OTPScreen(
-                verificationId: verificationId,
-                phoneNumber: fullPhone,
-              ),
-            ),
-          );
-        },
-
-        codeAutoRetrievalTimeout: (String verificationId) {
-          debugPrint(
-            'OTP auto retrieval timeout: $verificationId',
-          );
-        },
-      );
-    } catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        loading = false;
-      });
-
-      showMessage('Something went wrong. Please try again.');
-    }
-  }
-
-  void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
-  }
-
-  @override
-  void dispose() {
-    phoneController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            children: [
-              const SizedBox(height: 55),
-
-              Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  color: lightGreen,
-                  borderRadius: BorderRadius.circular(25),
-                ),
-                child: const Icon(
-                  Icons.recycling,
-                  color: primaryGreen,
-                  size: 52,
-                ),
-              ),
-
-              const SizedBox(height: 25),
-
-              const Text(
-                'Welcome to',
-                style: TextStyle(
-                  color: grayColor,
-                  fontSize: 17,
-                ),
-              ),
-
-              const SizedBox(height: 5),
-
-              const Text(
-                'Kabadiwala Connect',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: darkGreen,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              const Text(
-                'Fair prices • Verified recyclers • Digital records',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: grayColor,
-                  fontSize: 14,
-                ),
-              ),
-
-              const SizedBox(height: 55),
-
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Mobile Number',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: textColor,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
-              TextField(
-                controller: phoneController,
-                keyboardType: TextInputType.phone,
-                maxLength: 10,
-                decoration: InputDecoration(
-                  counterText: '',
-                  prefixText: '+91  ',
-                  prefixStyle: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: textColor,
-                  ),
-                  hintText: 'Enter 10-digit mobile number',
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(15),
-                    borderSide: BorderSide.none,
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(15),
-                    borderSide: const BorderSide(
-                      color: Color(0xFFE2E8F0),
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 25),
-
-              SizedBox(
-                width: double.infinity,
-                height: 55,
-                child: ElevatedButton(
-                  onPressed: loading ? null : sendOTP,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryGreen,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                  ),
-                  child: loading
-                      ? const CircularProgressIndicator(
-                          color: Colors.white,
-                        )
-                      : const Text(
-                          'Send OTP',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                ),
-              ),
-
-              const SizedBox(height: 25),
-
-              const Text(
-                'By continuing, you agree to use the platform for\n'
-                'responsible and formal recycling transactions.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: grayColor,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ============================================================
-// OTP SCREEN
-// ============================================================
-
-class OTPScreen extends StatefulWidget {
-  final String verificationId;
-  final String phoneNumber;
-
-  const OTPScreen({
-    super.key,
-    required this.verificationId,
-    required this.phoneNumber,
-  });
-
-  @override
-  State<OTPScreen> createState() => _OTPScreenState();
-}
-
-class _OTPScreenState extends State<OTPScreen> {
-  final TextEditingController otpController = TextEditingController();
-
-  bool loading = false;
-
-  Future<void> verifyOTP() async {
-    String otp = otpController.text.trim();
-
-    if (otp.length != 6) {
-      showMessage('Please enter the 6-digit OTP.');
-      return;
-    }
-
-    setState(() {
-      loading = true;
-    });
-
-    try {
-      final credential = PhoneAuthProvider.credential(
-        verificationId: widget.verificationId,
-        smsCode: otp,
-      );
-
-      await FirebaseAuth.instance.signInWithCredential(
-        credential,
-      );
-
-      if (!mounted) return;
-
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(
-          builder: (_) => const HomeScreen(),
-        ),
-        (route) => false,
-      );
-    } on FirebaseAuthException catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        loading = false;
-      });
-
-      showMessage(
-        e.message ?? 'Invalid OTP.',
-      );
-    } catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        loading = false;
-      });
-
-      showMessage('OTP verification failed.');
-    }
-  }
-
-  void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
-  }
-
-  @override
-  void dispose() {
-    otpController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Verify OTP'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            const SizedBox(height: 35),
-
-            const Icon(
-              Icons.sms_outlined,
-              color: primaryGreen,
-              size: 65,
-            ),
-
-            const SizedBox(height: 25),
-
-            const Text(
-              'Enter OTP',
-              style: TextStyle(
-                fontSize: 27,
-                fontWeight: FontWeight.bold,
-                color: textColor,
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            Text(
-              'OTP sent to ${widget.phoneNumber}',
-              style: const TextStyle(
-                color: grayColor,
-              ),
-            ),
-
-            const SizedBox(height: 40),
-
-            TextField(
-              controller: otpController,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 25,
-                letterSpacing: 8,
-                fontWeight: FontWeight.bold,
-              ),
-              decoration: InputDecoration(
-                counterText: '',
-                hintText: '------',
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(15),
-                  borderSide: const BorderSide(
-                    color: Color(0xFFE2E8F0),
-                  ),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 30),
-
-            SizedBox(
-              width: double.infinity,
-              height: 55,
-              child: ElevatedButton(
-                onPressed: loading ? null : verifyOTP,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryGreen,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
-                  ),
-                ),
-                child: loading
-                    ? const CircularProgressIndicator(
-                        color: Colors.white,
-                      )
-                    : const Text(
-                        'Verify OTP',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ============================================================
 // HOME SCREEN
 // ============================================================
@@ -587,47 +263,47 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int selectedIndex = 0;
-String selectedLanguage = 'English';
-  final List<Widget> screens = const [
-    HomeDashboard(),
-    TransactionHistory(),
-  ];
-
-  Future<void> logout() async {
-    await FirebaseAuth.instance.signOut();
-
-    if (!mounted) return;
-
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const LoginScreen(),
-      ),
-      (route) => false,
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
+    final screens = [
+      HomeDashboard(
+        onLanguageChanged: () {
+          setState(() {});
+        },
+      ),
+      const TransactionHistory(),
+    ];
+
     return Scaffold(
       body: screens[selectedIndex],
+
       bottomNavigationBar: NavigationBar(
         selectedIndex: selectedIndex,
+
         onDestinationSelected: (index) {
           setState(() {
             selectedIndex = index;
           });
         },
-        destinations: const [
+
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Home',
+            icon: const Icon(Icons.home_outlined),
+            selectedIcon: const Icon(Icons.home),
+            label: AppLanguage.get(
+              'Home',
+              'होम',
+            ),
           ),
+
           NavigationDestination(
-            icon: Icon(Icons.history_outlined),
-            selectedIcon: Icon(Icons.history),
-            label: 'History',
+            icon: const Icon(Icons.history_outlined),
+            selectedIcon: const Icon(Icons.history),
+            label: AppLanguage.get(
+              'History',
+              'इतिहास',
+            ),
           ),
         ],
       ),
@@ -639,19 +315,80 @@ String selectedLanguage = 'English';
 // HOME DASHBOARD
 // ============================================================
 
-class HomeDashboard extends StatelessWidget {
-  const HomeDashboard({super.key});
+class HomeDashboard extends StatefulWidget {
+  final VoidCallback? onLanguageChanged;
+
+  const HomeDashboard({
+    super.key,
+    this.onLanguageChanged,
+  });
+
+  @override
+  State<HomeDashboard> createState() => _HomeDashboardState();
+}
+
+class _HomeDashboardState extends State<HomeDashboard> {
+  bool isOnline = true;
+
+  StreamSubscription<List<ConnectivityResult>>? connectivitySubscription;
+
+  @override
+  void initState() {
+    super.initState();
+
+    checkConnectivity();
+
+    connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen((results) {
+      if (!mounted) return;
+
+      setState(() {
+        isOnline = results.any(
+          (result) => result != ConnectivityResult.none,
+        );
+      });
+    });
+  }
+Future<void> checkConnectivity() async {
+  final results = await Connectivity().checkConnectivity();
+
+  if (!mounted) return;
+
+  final online = results.any(
+    (result) => result != ConnectivityResult.none,
+  );
+
+  setState(() {
+    isOnline = online;
+  });
+
+  // ========================================================
+  // INTERNET AVAILABLE -> SYNC PENDING TRANSACTIONS
+  // ========================================================
+
+  if (online) {
+    await syncPendingTransactions();
+  }
+}
+
+  @override
+  void dispose() {
+    connectivitySubscription?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ============================================================
+            // HEADER
+            // ============================================================
+
             Row(
               children: [
                 Container(
@@ -670,18 +407,23 @@ class HomeDashboard extends StatelessWidget {
 
                 const SizedBox(width: 12),
 
-                const Expanded(
+                Expanded(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Hello! 👋',
-                        style: TextStyle(
+                        AppLanguage.get(
+                          'Hello! 👋',
+                          'नमस्ते! 👋',
+                        ),
+                        style: const TextStyle(
                           color: grayColor,
                           fontSize: 14,
                         ),
                       ),
-                      Text(
+
+                      const Text(
                         'Kabadiwala Connect',
                         style: TextStyle(
                           color: textColor,
@@ -693,129 +435,242 @@ class HomeDashboard extends StatelessWidget {
                   ),
                 ),
 
-                Row(
-  children: [
-    IconButton(
-      tooltip: 'Language',
-      onPressed: () {
-        showModalBottomSheet(
-          context: context,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(
-              top: Radius.circular(20),
-            ),
-          ),
-          builder: (sheetContext) {
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Choose Language',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: textColor,
+                IconButton(
+                  tooltip: AppLanguage.get(
+                    'Language',
+                    'भाषा',
+                  ),
+                  onPressed: () {
+                    showModalBottomSheet(
+                      context: context,
+                      shape:
+                          const RoundedRectangleBorder(
+                        borderRadius:
+                            BorderRadius.vertical(
+                          top: Radius.circular(20),
+                        ),
                       ),
-                    ),
+                      builder: (sheetContext) {
+                        return SafeArea(
+                          child: Padding(
+                            padding:
+                                const EdgeInsets.all(20),
+                            child: Column(
+                              mainAxisSize:
+                                  MainAxisSize.min,
+                              children: [
+                                Text(
+                                  AppLanguage.get(
+                                    'Choose Language',
+                                    'भाषा चुनें',
+                                  ),
+                                  style:
+                                      const TextStyle(
+                                    fontSize: 20,
+                                    fontWeight:
+                                        FontWeight.bold,
+                                    color: textColor,
+                                  ),
+                                ),
 
-                    const SizedBox(height: 20),
+                                const SizedBox(
+                                  height: 20,
+                                ),
 
-                    ListTile(
-                      leading: const Text(
-                        '🇬🇧',
-                        style: TextStyle(fontSize: 25),
-                      ),
-                      title: const Text('English'),
-                      trailing: const Icon(
-                        Icons.check_circle,
-                        color: primaryGreen,
-                      ),
-                      onTap: () {
-                        Navigator.pop(sheetContext);
-                      },
-                    ),
+                                ListTile(
+                                  leading: const Text(
+                                    '🇬🇧',
+                                    style:
+                                        TextStyle(
+                                      fontSize: 25,
+                                    ),
+                                  ),
+                                  title:
+                                      const Text(
+                                    'English',
+                                  ),
+                                  trailing:
+                                      !AppLanguage
+                                              .isHindi
+                                          ? const Icon(
+                                              Icons
+                                                  .check_circle,
+                                              color:
+                                                  primaryGreen,
+                                            )
+                                          : null,
+                                  onTap: () {
+                                    AppLanguage
+                                            .isHindi =
+                                        false;
 
-                    ListTile(
-                      leading: const Text(
-                        '🇮🇳',
-                        style: TextStyle(fontSize: 25),
-                      ),
-                      title: const Text('हिंदी'),
-                      onTap: () {
-                        Navigator.pop(sheetContext);
+                                    Navigator.pop(
+                                      sheetContext,
+                                    );
 
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Hindi language selected',
+                                    setState(() {});
+
+                                    widget
+                                        .onLanguageChanged
+                                        ?.call();
+                                  },
+                                ),
+
+                                ListTile(
+                                  leading: const Text(
+                                    '🇮🇳',
+                                    style:
+                                        TextStyle(
+                                      fontSize: 25,
+                                    ),
+                                  ),
+                                  title:
+                                      const Text(
+                                    'हिंदी',
+                                  ),
+                                  trailing:
+                                      AppLanguage
+                                              .isHindi
+                                          ? const Icon(
+                                              Icons
+                                                  .check_circle,
+                                              color:
+                                                  primaryGreen,
+                                            )
+                                          : null,
+                                  onTap: () {
+                                    AppLanguage
+                                            .isHindi =
+                                        true;
+
+                                    Navigator.pop(
+                                      sheetContext,
+                                    );
+
+                                    setState(() {});
+
+                                    widget
+                                        .onLanguageChanged
+                                        ?.call();
+                                  },
+                                ),
+                              ],
                             ),
                           ),
                         );
                       },
-                    ),
-                  ],
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.language,
+                    color: grayColor,
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+
+            // ============================================================
+            // ONLINE / OFFLINE STATUS
+            // ============================================================
+
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 10,
+              ),
+              decoration: BoxDecoration(
+                color: isOnline
+                    ? lightGreen
+                    : const Color(0xFFFFF7ED),
+                borderRadius:
+                    BorderRadius.circular(12),
+                border: Border.all(
+                  color: isOnline
+                      ? const Color(0xFFBBF7D0)
+                      : const Color(0xFFFED7AA),
                 ),
               ),
-            );
-          },
-        );
-      },
-      icon: const Icon(
-        Icons.language,
-        color: grayColor,
-      ),
-    ),
-    IconButton(
-  onPressed: () async {
-    await FirebaseAuth.instance.signOut();
+              child: Row(
+                children: [
+                  Icon(
+                    isOnline
+                        ? Icons.wifi
+                        : Icons.wifi_off,
+                    size: 18,
+                    color: isOnline
+                        ? darkGreen
+                        : const Color(0xFFC2410C),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      isOnline
+                          ? AppLanguage.get(
+                              'Online',
+                              'ऑनलाइन',
+                            )
+                          : AppLanguage.get(
+                              'Offline — Data will be saved locally',
+                              'ऑफलाइन — डेटा स्थानीय रूप से सेव होगा',
+                            ),
+                      style: TextStyle(
+                        color: isOnline
+                            ? darkGreen
+                            : const Color(
+                                0xFFC2410C,
+                              ),
+                        fontSize: 13,
+                        fontWeight:
+                            FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
-    if (!context.mounted) return;
+            const SizedBox(height: 20),
 
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(
-        builder: (_) => const LoginScreen(),
-      ),
-      (route) => false,
-    );
-  },
-  icon: const Icon(
-    Icons.logout,
-    color: grayColor,
-       ),
-    ),
-  ],
- ),
-              ],
-            ), 
-
-            const SizedBox(height: 30),
+            // ============================================================
+            // BANNER
+            // ============================================================
 
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(22),
               decoration: BoxDecoration(
                 color: primaryGreen,
-                borderRadius: BorderRadius.circular(22),
+                borderRadius:
+                    BorderRadius.circular(22),
               ),
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Column(
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Sell scrap through\nformal recycling',
-                    style: TextStyle(
+                    AppLanguage.get(
+                      'Sell scrap through\nformal recycling',
+                      'स्क्रैप बेचें\nऔपचारिक रीसाइक्लिंग के माध्यम से',
+                    ),
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 24,
-                      fontWeight: FontWeight.bold,
+                      fontWeight:
+                          FontWeight.bold,
                     ),
                   ),
-                  SizedBox(height: 10),
+
+                  const SizedBox(height: 10),
+
                   Text(
-                    'Check fair prices, find verified recyclers\nand keep digital transaction records.',
-                    style: TextStyle(
+                    AppLanguage.get(
+                      'Check fair prices, find verified recyclers\nand keep digital transaction records.',
+                      'उचित कीमत देखें, सत्यापित रीसाइक्लर खोजें\nऔर डिजिटल लेनदेन रिकॉर्ड रखें।',
+                    ),
+                    style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
                     ),
@@ -826,9 +681,16 @@ class HomeDashboard extends StatelessWidget {
 
             const SizedBox(height: 25),
 
-            const Text(
-              'Quick Actions',
-              style: TextStyle(
+            // ============================================================
+            // QUICK ACTIONS
+            // ============================================================
+
+            Text(
+              AppLanguage.get(
+                'Quick Actions',
+                'त्वरित कार्य',
+              ),
+              style: const TextStyle(
                 color: textColor,
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
@@ -841,15 +703,24 @@ class HomeDashboard extends StatelessWidget {
               children: [
                 Expanded(
                   child: ActionCard(
-                    icon: Icons.add_box_outlined,
-                    title: 'Add Scrap',
-                    subtitle: 'Create a new lot',
+                    icon:
+                        Icons.add_box_outlined,
+                    title: AppLanguage.get(
+                      'Add Scrap',
+                      'स्क्रैप जोड़ें',
+                    ),
+                    subtitle:
+                        AppLanguage.get(
+                      'Create a new lot',
+                      'नया लॉट बनाएं',
+                    ),
                     iconColor: primaryGreen,
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const AddScrapScreen(),
+                          builder: (_) =>
+                              const AddScrapScreen(),
                         ),
                       );
                     },
@@ -861,14 +732,22 @@ class HomeDashboard extends StatelessWidget {
                 Expanded(
                   child: ActionCard(
                     icon: Icons.price_check,
-                    title: 'Fair Price',
-                    subtitle: 'Check material rates',
+                    title: AppLanguage.get(
+                      'Fair Price',
+                      'उचित कीमत',
+                    ),
+                    subtitle:
+                        AppLanguage.get(
+                      'Check material rates',
+                      'मटेरियल की दर देखें',
+                    ),
                     iconColor: yellowColor,
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const AddScrapScreen(),
+                          builder: (_) =>
+                              const AddScrapScreen(),
                         ),
                       );
                     },
@@ -884,16 +763,26 @@ class HomeDashboard extends StatelessWidget {
                 Expanded(
                   child: ActionCard(
                     icon: Icons.recycling,
-                    title: 'Recyclers',
-                    subtitle: 'Find verified recyclers',
+                    title: AppLanguage.get(
+                      'Recyclers',
+                      'रीसाइक्लर',
+                    ),
+                    subtitle:
+                        AppLanguage.get(
+                      'Find verified recyclers',
+                      'सत्यापित रीसाइक्लर खोजें',
+                    ),
                     iconColor: blueColor,
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const RecyclerMatchingScreen(
+                          builder: (_) =>
+                              const RecyclerMatchingScreen(
+                            city: 'Jaipur',
                             material: 'PCB',
                             weight: 10,
+                            rate: 25,
                             estimatedValue: 250,
                           ),
                         ),
@@ -907,14 +796,23 @@ class HomeDashboard extends StatelessWidget {
                 Expanded(
                   child: ActionCard(
                     icon: Icons.history,
-                    title: 'History',
-                    subtitle: 'View transactions',
-                    iconColor: Colors.purple,
+                    title: AppLanguage.get(
+                      'History',
+                      'इतिहास',
+                    ),
+                    subtitle:
+                        AppLanguage.get(
+                      'View transactions',
+                      'लेनदेन देखें',
+                    ),
+                    iconColor:
+                        Colors.purple,
                     onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => const TransactionHistory(),
+                          builder: (_) =>
+                              const TransactionHistory(),
                         ),
                       );
                     },
@@ -925,9 +823,16 @@ class HomeDashboard extends StatelessWidget {
 
             const SizedBox(height: 30),
 
-            const Text(
-              'Why Kabadiwala Connect?',
-              style: TextStyle(
+            // ============================================================
+            // WHY KABADIWALA CONNECT
+            // ============================================================
+
+            Text(
+              AppLanguage.get(
+                'Why Kabadiwala Connect?',
+                'Kabadiwala Connect क्यों?',
+              ),
+              style: const TextStyle(
                 color: textColor,
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
@@ -938,53 +843,64 @@ class HomeDashboard extends StatelessWidget {
 
             FeatureTile(
               icon: Icons.currency_rupee,
-              title: 'Fair Price Information',
+              title: AppLanguage.get(
+                'Fair Price Information',
+                'उचित कीमत की जानकारी',
+              ),
               description:
-                  'See estimated value before selling your material.',
+                  AppLanguage.get(
+                'See estimated value before selling your material.',
+                'अपना मटेरियल बेचने से पहले अनुमानित कीमत देखें।',
+              ),
             ),
 
             FeatureTile(
-              icon: Icons.verified_outlined,
-              title: 'Verified Recycler Connection',
+              icon:
+                  Icons.verified_outlined,
+              title: AppLanguage.get(
+                'Verified Recycler Connection',
+                'सत्यापित रीसाइक्लर से कनेक्शन',
+              ),
               description:
-                  'Find recyclers according to material and distance.',
+                  AppLanguage.get(
+                'Find recyclers according to material and distance.',
+                'मटेरियल और दूरी के अनुसार रीसाइक्लर खोजें।',
+              ),
             ),
 
             FeatureTile(
-              icon: Icons.receipt_long_outlined,
-              title: 'Digital Transaction Record',
+              icon:
+                  Icons.receipt_long_outlined,
+              title: AppLanguage.get(
+                'Digital Transaction Record',
+                'डिजिटल लेनदेन रिकॉर्ड',
+              ),
               description:
-                  'Each completed transaction gets a unique Lot ID.',
+                  AppLanguage.get(
+                'Each completed transaction gets a unique Lot ID.',
+                'हर पूर्ण लेनदेन को एक यूनिक लॉट ID मिलती है।',
+              ),
             ),
 
             FeatureTile(
-              icon: Icons.wifi_off_outlined,
-              title: 'Simple & Offline-Friendly',
+              icon:
+                  Icons.wifi_off_outlined,
+              title: AppLanguage.get(
+                'Simple & Offline-Friendly',
+                'सरल और ऑफलाइन उपयोग के अनुकूल',
+              ),
               description:
-                  'Designed for entry-level Android users and low connectivity.',
+                  AppLanguage.get(
+                'Designed for entry-level Android users and low connectivity.',
+                'कम कनेक्टिविटी और शुरुआती Android यूज़र्स के लिए बनाया गया है।',
+              ),
             ),
-
-            if (user != null) ...[
-              const SizedBox(height: 15),
-              Text(
-                'Logged in successfully',
-                style: TextStyle(
-                  color: primaryGreen.withValues(alpha: 0.8),
-                  fontSize: 12,
+          ],
         ),
-       ),
-      ],
-     ],
-    ),
-   ),
-  );
- }
+      ),
+    );
+  }
 }
-
-// ============================================================
-// ACTION CARD
-// ============================================================
-
 class ActionCard extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -1055,10 +971,6 @@ class ActionCard extends StatelessWidget {
   }
 }
 
-// ============================================================
-// FEATURE TILE
-// ============================================================
-
 class FeatureTile extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -1125,7 +1037,6 @@ class FeatureTile extends StatelessWidget {
     );
   }
 }
-
 // ============================================================
 // ADD SCRAP SCREEN
 // ============================================================
@@ -1145,16 +1056,63 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
 
   // Photo variable
   XFile? selectedPhoto;
+  String? aiAnalysisResult;
+  bool isAnalyzing = false;
 
-  final Map<String, int> rates = {
-    'PCB': 25,
-    'Copper': 550,
-    'Aluminium': 180,
-    'Iron': 35,
-    'Plastic': 30,
-    'Paper': 15,
-    'E-Waste': 45,
-  };
+  double? currentRate;
+  String currentRateUnit = 'kg';
+  String? rateSource;
+  String? rateDate;
+  bool isLoadingRate = false;
+  String? rateError;
+
+  String selectedCity = 'Jaipur';
+
+  final List<String> cities = [
+    'Ahmedabad',
+    'Bengaluru Urban',
+    'Bhopal',
+    'Chandigarh',
+    'Chennai',
+    'Cochin',
+    'Coimbatore',
+    'Gurugram',
+    'Hyderabad',
+    'Indore',
+    'Jaipur',
+    'Jammu',
+    'Jamnagar',
+    'Kanpur',
+    'Kolkata',
+    'Lucknow',
+    'Ludhiana',
+    'Mandi Gobindgarh',
+    'Mumbai',
+    'Nagpur',
+    'New Delhi',
+    'Pune',
+    'Surat',
+    'Vadodara',
+  ];
+
+  final List<String> materials = [
+    'Copper',
+    'Aluminium',
+    'Iron',
+    'Brass',
+    'Wire',
+    'E-waste',
+    'Li-ion Battery',
+    'Magnet',
+    'AC Jali',
+    'AC Split',
+    'AC Window',
+    'Compressor',
+    'Fridge (Double Door)',
+    'Fridge (Single Door)',
+    'PCB',
+    'Washing Machine',
+  ];
 
   // ==========================================================
   // TAKE PHOTO
@@ -1163,15 +1121,212 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
   Future<void> pickPhoto() async {
     final ImagePicker picker = ImagePicker();
 
-    final XFile? photo = await picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 70,
-    );
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(20),
+        ),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  AppLanguage.get(
+                    'Add Scrap Photo',
+                    'स्क्रैप की फोटो जोड़ें',
+                  ),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: textColor,
+                  ),
+                ),
 
-    if (photo != null) {
+                const SizedBox(height: 20),
+
+                ListTile(
+                  leading: const Icon(
+                    Icons.camera_alt,
+                    color: primaryGreen,
+                  ),
+                  title: Text(
+                    AppLanguage.get(
+                      'Take Photo',
+                      'फोटो लें',
+                    ),
+                  ),
+                  subtitle: Text(
+                    AppLanguage.get(
+                      'Use camera',
+                      'कैमरा इस्तेमाल करें',
+                    ),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+
+                    final XFile? photo =
+                        await picker.pickImage(
+                      source: ImageSource.camera,
+                      imageQuality: 70,
+                    );
+
+                    if (photo != null) {
+                      setState(() {
+                        selectedPhoto = photo;
+                      });
+                    }
+                  },
+                ),
+
+                ListTile(
+                  leading: const Icon(
+                    Icons.photo_library,
+                    color: primaryGreen,
+                  ),
+                  title: Text(
+                    AppLanguage.get(
+                      'Choose from Gallery',
+                      'गैलरी से चुनें',
+                    ),
+                  ),
+                  subtitle: Text(
+                    AppLanguage.get(
+                      'Select an existing photo',
+                      'पहले से मौजूद फोटो चुनें',
+                    ),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+
+                    final XFile? photo =
+                        await picker.pickImage(
+                      source: ImageSource.gallery,
+                      imageQuality: 70,
+                    );
+
+                    if (photo != null) {
+                      setState(() {
+                        selectedPhoto = photo;
+                      });
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ==========================================================
+  // AI SCRAP ANALYSIS
+  // ==========================================================
+
+  Future<void> analyzeScrapWithAI() async {
+    if (selectedPhoto == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLanguage.get(
+              'Please add a scrap photo first.',
+              'कृपया पहले स्क्रैप की फोटो जोड़ें।',
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      isAnalyzing = true;
+    });
+
+    try {
+      final model = FirebaseAI.googleAI().generativeModel(
+        model: 'gemini-3.8-flash',
+      );
+
+      final imageBytes =
+          await selectedPhoto!.readAsBytes();
+
+      final imagePart = InlineDataPart(
+        'image/jpeg',
+        imageBytes,
+      );
+
+      const prompt = '''
+Analyze this scrap/e-waste image for a recycling application.
+
+Identify the visible materials and estimate their approximate percentage composition.
+
+Give the result in this exact format:
+
+Material: ...
+
+Composition:
+- Material 1: ...%
+- Material 2: ...%
+- Material 3: ...%
+
+Components: ...
+
+Recyclable: ...
+
+Estimated Weight Range: ... kg
+
+Confidence: ...
+
+Rules:
+- Composition percentages must be approximate visual estimates only.
+- Try to make the composition percentages add up to approximately 100%.
+- If only one material is clearly visible, give it a high approximate percentage.
+- Do not invent materials that are not visible.
+- Weight must be an approximate RANGE, not an exact weight.
+- Do not claim that weight or composition is measured.
+- If the image is unclear, clearly say "Low confidence".
+- Keep the answer simple and practical for a scrap collector.
+''';
+
+      final response =
+          await model.generateContent([
+        Content.multi([
+          TextPart(prompt),
+          imagePart,
+        ]),
+      ]);
+
+      final result =
+          response.text ?? 'No analysis received.';
+
+      if (!mounted) return;
+
       setState(() {
-        selectedPhoto = photo;
+        aiAnalysisResult = result;
+        isAnalyzing = false;
       });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        isAnalyzing = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLanguage.get(
+              'AI analysis failed: $e',
+              'AI विश्लेषण विफल हुआ: $e',
+            ),
+          ),
+        ),
+      );
     }
   }
 
@@ -1186,16 +1341,33 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
 
     if (weight == null || weight <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a valid weight.'),
+        SnackBar(
+          content: Text(
+            AppLanguage.get(
+              'Please enter a valid weight.',
+              'कृपया सही वजन दर्ज करें।',
+            ),
+          ),
         ),
       );
       return;
     }
 
-    final rate = rates[selectedMaterial] ?? 0;
+    if (currentRate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLanguage.get(
+              'Market rate is unavailable for this material and city.',
+              'इस मटेरियल और शहर के लिए बाजार दर उपलब्ध नहीं है।',
+            ),
+          ),
+        ),
+      );
+      return;
+    }
 
-    final value = weight * rate;
+    final value = weight * currentRate!;
 
     Navigator.push(
       context,
@@ -1203,11 +1375,19 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
         builder: (_) => PriceEstimateScreen(
           material: selectedMaterial,
           weight: weight,
-          rate: rate,
+          rate: currentRate!,
           estimatedValue: value,
+          city: selectedCity,
+          selectedPhoto: selectedPhoto,
         ),
       ),
     );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    fetchMarketRate();
   }
 
   @override
@@ -1216,28 +1396,263 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
     super.dispose();
   }
 
+  // ==========================================================
+// FETCH MARKET RATE - ONLINE + OFFLINE CACHE
+// ==========================================================
+
+Future<void> fetchMarketRate() async {
+  setState(() {
+    isLoadingRate = true;
+    rateError = null;
+    currentRate = null;
+  });
+
+  try {
+    // ======================================================
+    // 1. TRY FIRESTORE FIRST
+    // ======================================================
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('market_rates')
+        .where(
+          'city',
+          isEqualTo: selectedCity,
+        )
+        .where(
+          'material',
+          isEqualTo: selectedMaterial,
+        )
+        .orderBy(
+          'date',
+          descending: true,
+        )
+        .limit(1)
+        .get();
+
+    // ======================================================
+    // 2. FIRESTORE DATA FOUND
+    // ======================================================
+
+    if (snapshot.docs.isNotEmpty) {
+      final data = snapshot.docs.first.data();
+
+      final newRateData = <String, dynamic>{
+        'city': selectedCity,
+        'material': selectedMaterial,
+        'rate': (data['rate'] as num?)?.toDouble() ?? 0,
+        'unit': data['unit']?.toString() ?? 'kg',
+        'source': data['source']?.toString() ?? 'Market data',
+        'date': data['date']?.toString() ?? '',
+      };
+
+      // ====================================================
+      // SAVE THIS RATE LOCALLY
+      // ====================================================
+
+      final cachedRates =
+          await OfflineStorage.getMarketRates();
+
+      // Remove old cache for same city + material
+      cachedRates.removeWhere(
+        (item) =>
+            item['city']?.toString().toLowerCase() ==
+                selectedCity.toLowerCase() &&
+            item['material']?.toString().toLowerCase() ==
+                selectedMaterial.toLowerCase(),
+      );
+
+      // Add latest rate
+      cachedRates.add(newRateData);
+
+      await OfflineStorage.saveMarketRates(
+        cachedRates,
+      );
+
+      // ====================================================
+      // SHOW ONLINE RATE
+      // ====================================================
+
+      if (!mounted) return;
+
+      setState(() {
+        currentRate =
+            (data['rate'] as num?)?.toDouble();
+
+        currentRateUnit =
+            data['unit']?.toString() ?? 'kg';
+
+        rateSource =
+            data['source']?.toString();
+
+        rateDate =
+            data['date']?.toString();
+
+        rateError = null;
+        isLoadingRate = false;
+      });
+
+      return;
+    }
+
+    // ======================================================
+    // 3. FIRESTORE HAS NO RATE
+    //    TRY LOCAL CACHE
+    // ======================================================
+
+    final cachedRates =
+        await OfflineStorage.getMarketRates();
+
+    final cachedRate = cachedRates.where(
+      (item) =>
+          item['city']?.toString().toLowerCase() ==
+              selectedCity.toLowerCase() &&
+          item['material']?.toString().toLowerCase() ==
+              selectedMaterial.toLowerCase(),
+    ).toList();
+
+    if (cachedRate.isNotEmpty) {
+      final data = cachedRate.first;
+
+      if (!mounted) return;
+
+      setState(() {
+        currentRate =
+            (data['rate'] as num?)?.toDouble();
+
+        currentRateUnit =
+            data['unit']?.toString() ?? 'kg';
+
+        rateSource =
+            '${data['source']?.toString() ?? 'Market data'} (Cached)';
+
+        rateDate =
+            data['date']?.toString();
+
+        rateError = null;
+        isLoadingRate = false;
+      });
+
+      return;
+    }
+
+    // ======================================================
+    // 4. NO ONLINE + NO CACHE
+    // ======================================================
+
+    if (!mounted) return;
+
+    setState(() {
+      currentRate = null;
+      rateSource = null;
+      rateDate = null;
+      currentRateUnit = 'kg';
+
+      rateError = AppLanguage.get(
+        'Rate unavailable for $selectedMaterial in $selectedCity.',
+        '$selectedCity में $selectedMaterial की दर उपलब्ध नहीं है।',
+      );
+
+      isLoadingRate = false;
+    });
+  } catch (e) {
+    // ======================================================
+    // 5. INTERNET / FIRESTORE ERROR
+    //    USE LOCAL CACHE
+    // ======================================================
+
+    try {
+      final cachedRates =
+          await OfflineStorage.getMarketRates();
+
+      final cachedRate = cachedRates.where(
+        (item) =>
+            item['city']?.toString().toLowerCase() ==
+                selectedCity.toLowerCase() &&
+            item['material']?.toString().toLowerCase() ==
+                selectedMaterial.toLowerCase(),
+      ).toList();
+
+      if (cachedRate.isNotEmpty) {
+        final data = cachedRate.first;
+
+        if (!mounted) return;
+
+        setState(() {
+          currentRate =
+              (data['rate'] as num?)?.toDouble();
+
+          currentRateUnit =
+              data['unit']?.toString() ?? 'kg';
+
+          rateSource =
+              '${data['source']?.toString() ?? 'Market data'} (Offline Cache)';
+
+          rateDate =
+              data['date']?.toString();
+
+          rateError = null;
+          isLoadingRate = false;
+        });
+
+        return;
+      }
+    } catch (_) {
+      // Local cache also failed.
+    }
+
+    // ======================================================
+    // 6. NOTHING AVAILABLE
+    // ======================================================
+
+    if (!mounted) return;
+
+    setState(() {
+      currentRate = null;
+
+      rateError = AppLanguage.get(
+        'Could not load market rate. No offline data available.',
+        'बाजार दर लोड नहीं हो सकी। ऑफलाइन डेटा उपलब्ध नहीं है।',
+      );
+
+      isLoadingRate = false;
+    });
+  }
+}
+
+  // ==========================================================
+  // BUILD
+  // ==========================================================
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Add Scrap'),
+        title: Text(
+          AppLanguage.get(
+            'Add Scrap',
+            'स्क्रैप जोड़ें',
+          ),
+        ),
       ),
 
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
 
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
 
           children: [
-
             // ==================================================
             // TITLE
             // ==================================================
 
-            const Text(
-              'What material do you have?',
-              style: TextStyle(
+            Text(
+              AppLanguage.get(
+                'What material do you have?',
+                'आपके पास कौन सा मटेरियल है?',
+              ),
+              style: const TextStyle(
                 color: textColor,
                 fontSize: 21,
                 fontWeight: FontWeight.bold,
@@ -1246,9 +1661,12 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
 
             const SizedBox(height: 8),
 
-            const Text(
-              'Select material and enter approximate weight.',
-              style: TextStyle(
+            Text(
+              AppLanguage.get(
+                'Take a photo and let AI analyze your scrap.',
+                'फोटो लें और AI से अपने स्क्रैप का विश्लेषण करवाएं।',
+              ),
+              style: const TextStyle(
                 color: grayColor,
               ),
             ),
@@ -1256,117 +1674,76 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
             const SizedBox(height: 25),
 
             // ==================================================
-            // MATERIAL
-            // ==================================================
-
-            const Text(
-              'Material',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: textColor,
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            DropdownButtonFormField<String>(
-              initialValue: selectedMaterial,
-
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(15),
-                ),
-              ),
-
-              items: rates.keys.map((material) {
-                return DropdownMenuItem(
-                  value: material,
-                  child: Text(material),
-                );
-              }).toList(),
-
-              onChanged: (value) {
-                if (value == null) return;
-
-                setState(() {
-                  selectedMaterial = value;
-                });
-              },
-            ),
-
-            const SizedBox(height: 25),
-
-            // ==================================================
-            // WEIGHT
-            // ==================================================
-
-            const Text(
-              'Approximate Weight',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: textColor,
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
-            TextField(
-              controller: weightController,
-
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-
-              decoration: InputDecoration(
-                hintText: 'Example: 50',
-                suffixText: 'kg',
-                filled: true,
-                fillColor: Colors.white,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(15),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // ==================================================
             // PHOTO SECTION
             // ==================================================
 
             Container(
               width: double.infinity,
-
               padding: const EdgeInsets.all(16),
 
               decoration: BoxDecoration(
                 color: const Color(0xFFF8FAFC),
-
-                borderRadius: BorderRadius.circular(18),
-
+                borderRadius:
+                    BorderRadius.circular(18),
                 border: Border.all(
-                  color: const Color(0xFFE2E8F0),
+                  color:
+                      const Color(0xFFE2E8F0),
                 ),
               ),
 
               child: Column(
                 children: [
-
                   // PHOTO PREVIEW
+
                   if (selectedPhoto != null)
                     ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius:
+                          BorderRadius.circular(12),
 
-                      child: Image.file(
-                        File(selectedPhoto!.path),
+                      child:
+                          FutureBuilder<Uint8List>(
+                        future:
+                            selectedPhoto!.readAsBytes(),
 
-                        height: 180,
+                        builder:
+                            (context, snapshot) {
+                          if (snapshot
+                                  .connectionState ==
+                              ConnectionState
+                                  .waiting) {
+                            return const SizedBox(
+                              height: 180,
+                              width:
+                                  double.infinity,
+                              child: Center(
+                                child:
+                                    CircularProgressIndicator(),
+                              ),
+                            );
+                          }
 
-                        width: double.infinity,
+                          if (snapshot.hasData) {
+                            return Image.memory(
+                              snapshot.data!,
+                              height: 180,
+                              width:
+                                  double.infinity,
+                              fit: BoxFit.cover,
+                            );
+                          }
 
-                        fit: BoxFit.cover,
+                          return SizedBox(
+                            height: 180,
+                            child: Center(
+                              child: Text(
+                                AppLanguage.get(
+                                  'Unable to preview image',
+                                  'फोटो का प्रीव्यू नहीं दिखाया जा सका',
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     )
                   else
@@ -1379,25 +1756,35 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
                   const SizedBox(height: 12),
 
                   // PHOTO TEXT
+
                   Text(
                     selectedPhoto == null
-                        ? 'Add photo of scrap'
-                        : 'Scrap photo added',
+                        ? AppLanguage.get(
+                            'Add photo of scrap',
+                            'स्क्रैप की फोटो जोड़ें',
+                          )
+                        : AppLanguage.get(
+                            'Scrap photo added',
+                            'स्क्रैप की फोटो जोड़ दी गई',
+                          ),
 
                     style: const TextStyle(
                       fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                      fontWeight:
+                          FontWeight.w600,
                       color: textColor,
                     ),
                   ),
 
                   const SizedBox(height: 12),
 
-                  // CAMERA BUTTON
+                  // PHOTO BUTTON
+
                   SizedBox(
                     width: double.infinity,
 
-                    child: ElevatedButton.icon(
+                    child:
+                        ElevatedButton.icon(
                       onPressed: pickPhoto,
 
                       icon: const Icon(
@@ -1406,25 +1793,357 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
 
                       label: Text(
                         selectedPhoto == null
-                            ? 'Take Photo'
-                            : 'Retake Photo',
+                            ? AppLanguage.get(
+                                'Add Scrap Photo',
+                                'स्क्रैप की फोटो जोड़ें',
+                              )
+                            : AppLanguage.get(
+                                'Retake Photo',
+                                'फोटो दोबारा लें',
+                              ),
                       ),
 
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryGreen,
-                        foregroundColor: Colors.white,
+                      style:
+                          ElevatedButton.styleFrom(
+                        backgroundColor:
+                            primaryGreen,
+                        foregroundColor:
+                            Colors.white,
 
-                        padding: const EdgeInsets.symmetric(
+                        padding:
+                            const EdgeInsets
+                                .symmetric(
                           vertical: 14,
                         ),
 
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                        shape:
+                            RoundedRectangleBorder(
+                          borderRadius:
+                              BorderRadius.circular(
+                            12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // AI ANALYSIS BUTTON
+
+                  SizedBox(
+                    width: double.infinity,
+
+                    child:
+                        ElevatedButton.icon(
+                      onPressed:
+                          selectedPhoto == null
+                              ? null
+                              : analyzeScrapWithAI,
+
+                      icon: const Icon(
+                        Icons.auto_awesome,
+                      ),
+
+                      label: Text(
+                        AppLanguage.get(
+                          'Analyze Scrap with AI',
+                          'AI से स्क्रैप का विश्लेषण करें',
+                        ),
+                      ),
+
+                      style:
+                          ElevatedButton.styleFrom(
+                        backgroundColor:
+                            darkGreen,
+                        foregroundColor:
+                            Colors.white,
+
+                        padding:
+                            const EdgeInsets
+                                .symmetric(
+                          vertical: 14,
+                        ),
+
+                        shape:
+                            RoundedRectangleBorder(
+                          borderRadius:
+                              BorderRadius.circular(
+                            12,
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ],
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // ==================================================
+            // AI ANALYSIS RESULT
+            // ==================================================
+
+            if (aiAnalysisResult != null)
+              Container(
+                width: double.infinity,
+
+                padding:
+                    const EdgeInsets.all(18),
+
+                decoration: BoxDecoration(
+                  color: lightGreen,
+                  borderRadius:
+                      BorderRadius.circular(18),
+
+                  border: Border.all(
+                    color: primaryGreen,
+                  ),
+                ),
+
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.auto_awesome,
+                          color: darkGreen,
+                        ),
+
+                        const SizedBox(width: 8),
+
+                        Text(
+                          AppLanguage.get(
+                            'AI Scrap Analysis',
+                            'AI स्क्रैप विश्लेषण',
+                          ),
+
+                          style:
+                              const TextStyle(
+                            fontSize: 17,
+                            fontWeight:
+                                FontWeight.bold,
+                            color: darkGreen,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    Container(
+                      width: double.infinity,
+
+                      padding:
+                          const EdgeInsets.all(14),
+
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius:
+                            BorderRadius.circular(
+                          12,
+                        ),
+                      ),
+
+                      child: Text(
+                        aiAnalysisResult!,
+                        style:
+                            const TextStyle(
+                          color: textColor,
+                          fontSize: 14,
+                          height: 1.6,
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    Text(
+                      AppLanguage.get(
+                        'Please confirm or edit the material and weight below before calculating price.',
+                        'कीमत निकालने से पहले नीचे मटेरियल और वजन की पुष्टि या बदलाव करें।',
+                      ),
+
+                      style:
+                          const TextStyle(
+                        fontSize: 13,
+                        color: grayColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 25),
+
+            // ==================================================
+            // MATERIAL
+            // ==================================================
+
+            Text(
+              AppLanguage.get(
+                'Material',
+                'मटेरियल',
+              ),
+
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                color: textColor,
+              ),
+            ),
+
+            const SizedBox(height: 10),
+
+            DropdownButtonFormField<String>(
+              initialValue:
+                  selectedMaterial,
+
+              decoration:
+                  InputDecoration(
+                filled: true,
+                fillColor: Colors.white,
+
+                border:
+                    OutlineInputBorder(
+                  borderRadius:
+                      BorderRadius.circular(
+                    15,
+                  ),
+                ),
+              ),
+
+              items: materials.map(
+                (material) {
+                  return DropdownMenuItem(
+                    value: material,
+                    child: Text(material),
+                  );
+                },
+              ).toList(),
+
+              onChanged: (value) {
+                if (value == null) return;
+
+                setState(() {
+                  selectedMaterial = value;
+                });
+
+                fetchMarketRate();
+              },
+            ),
+
+            const SizedBox(height: 25),
+
+            // ==================================================
+            // CITY
+            // ==================================================
+
+            Text(
+              AppLanguage.get(
+                'City',
+                'शहर',
+              ),
+
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                color: textColor,
+              ),
+            ),
+
+            const SizedBox(height: 10),
+
+            DropdownButtonFormField<String>(
+              initialValue:
+                  selectedCity,
+
+              decoration:
+                  InputDecoration(
+                filled: true,
+                fillColor: Colors.white,
+
+                border:
+                    OutlineInputBorder(
+                  borderRadius:
+                      BorderRadius.circular(
+                    15,
+                  ),
+                ),
+              ),
+
+              items: cities.map(
+                (city) {
+                  return DropdownMenuItem(
+                    value: city,
+                    child: Text(city),
+                  );
+                },
+              ).toList(),
+
+              onChanged: (value) {
+                if (value == null) return;
+
+                setState(() {
+                  selectedCity = value;
+                });
+
+                fetchMarketRate();
+              },
+            ),
+
+            const SizedBox(height: 25),
+
+            // ==================================================
+            // WEIGHT
+            // ==================================================
+
+            Text(
+              AppLanguage.get(
+                'Approximate Weight',
+                'लगभग वजन',
+              ),
+
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                color: textColor,
+              ),
+            ),
+
+            const SizedBox(height: 10),
+
+            TextField(
+              controller:
+                  weightController,
+
+              keyboardType:
+                  const TextInputType
+                      .numberWithOptions(
+                decimal: true,
+              ),
+
+              decoration:
+                  InputDecoration(
+                hintText:
+                    AppLanguage.get(
+                  'Example: 50',
+                  'उदाहरण: 50',
+                ),
+
+                suffixText: 'kg',
+
+                filled: true,
+                fillColor: Colors.white,
+
+                border:
+                    OutlineInputBorder(
+                  borderRadius:
+                      BorderRadius.circular(
+                    15,
+                  ),
+                ),
               ),
             ),
 
@@ -1437,17 +2156,18 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
             Container(
               width: double.infinity,
 
-              padding: const EdgeInsets.all(18),
+              padding:
+                  const EdgeInsets.all(18),
 
               decoration: BoxDecoration(
                 color: lightGreen,
 
-                borderRadius: BorderRadius.circular(18),
+                borderRadius:
+                    BorderRadius.circular(18),
               ),
 
               child: Row(
                 children: [
-
                   const Icon(
                     Icons.info_outline,
                     color: darkGreen,
@@ -1456,14 +2176,47 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
                   const SizedBox(width: 12),
 
                   Expanded(
-                    child: Text(
-                      'Current sample rate: ₹${rates[selectedMaterial]}/kg',
+                    child: isLoadingRate
+                        ? Text(
+                            AppLanguage.get(
+                              'Loading latest market rate...',
+                              'नवीनतम बाजार दर लोड हो रही है...',
+                            ),
 
-                      style: const TextStyle(
-                        color: darkGreen,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                            style:
+                                const TextStyle(
+                              color: darkGreen,
+                              fontWeight:
+                                  FontWeight.w600,
+                            ),
+                          )
+                        : rateError != null
+                            ? Text(
+                                rateError!,
+                                style:
+                                    const TextStyle(
+                                  color:
+                                      darkGreen,
+                                  fontWeight:
+                                      FontWeight.w600,
+                                ),
+                              )
+                            : Text(
+                                AppLanguage.get(
+                                  'Indicative market rate: ₹${currentRate!.toStringAsFixed(2)}/$currentRateUnit\nSource: ${rateSource ?? 'Market data'}\nDate: ${rateDate ?? 'N/A'}',
+
+                                  'अनुमानित बाजार दर: ₹${currentRate!.toStringAsFixed(2)}/$currentRateUnit\nस्रोत: ${rateSource ?? 'Market data'}\nदिनांक: ${rateDate ?? 'N/A'}',
+                                ),
+
+                                style:
+                                    const TextStyle(
+                                  color:
+                                      darkGreen,
+                                  fontWeight:
+                                      FontWeight.w600,
+                                  height: 1.5,
+                                ),
+                              ),
                   ),
                 ],
               ),
@@ -1481,23 +2234,36 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
               height: 55,
 
               child: ElevatedButton(
-                onPressed: continueToPrice,
+                onPressed:
+                    continueToPrice,
 
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryGreen,
-                  foregroundColor: Colors.white,
+                style:
+                    ElevatedButton.styleFrom(
+                  backgroundColor:
+                      primaryGreen,
+                  foregroundColor:
+                      Colors.white,
 
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15),
+                  shape:
+                      RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.circular(
+                      15,
+                    ),
                   ),
                 ),
 
-                child: const Text(
-                  'Check Estimated Value',
+                child: Text(
+                  AppLanguage.get(
+                    'Check Estimated Value',
+                    'अनुमानित कीमत देखें',
+                  ),
 
-                  style: TextStyle(
+                  style:
+                      const TextStyle(
                     fontSize: 16,
-                    fontWeight: FontWeight.bold,
+                    fontWeight:
+                        FontWeight.bold,
                   ),
                 ),
               ),
@@ -1508,7 +2274,6 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
     );
   }
 }
-
 // ============================================================
 // PRICE ESTIMATE SCREEN
 // ============================================================
@@ -1516,10 +2281,9 @@ class _AddScrapScreenState extends State<AddScrapScreen> {
 class PriceEstimateScreen extends StatelessWidget {
   final String material;
   final double weight;
-  final int rate;
+  final double rate;
   final double estimatedValue;
-
-  // Photo received from Add Scrap screen
+  final String city;
   final XFile? selectedPhoto;
 
   const PriceEstimateScreen({
@@ -1528,6 +2292,7 @@ class PriceEstimateScreen extends StatelessWidget {
     required this.weight,
     required this.rate,
     required this.estimatedValue,
+    required this.city,
     this.selectedPhoto,
   });
 
@@ -1535,7 +2300,12 @@ class PriceEstimateScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Price Estimate'),
+        title: Text(
+          AppLanguage.get(
+            'Price Estimate',
+            'कीमत का अनुमान',
+          ),
+        ),
       ),
 
       body: Padding(
@@ -1543,16 +2313,14 @@ class PriceEstimateScreen extends StatelessWidget {
 
         child: Column(
           children: [
-
             const SizedBox(height: 20),
 
-            // ==================================================
-            // PRICE
-            // ==================================================
+            // =========================
+            // ESTIMATED VALUE
+            // =========================
 
             Container(
               width: double.infinity,
-
               padding: const EdgeInsets.all(25),
 
               decoration: BoxDecoration(
@@ -1562,7 +2330,6 @@ class PriceEstimateScreen extends StatelessWidget {
 
               child: Column(
                 children: [
-
                   const Icon(
                     Icons.currency_rupee,
                     color: primaryGreen,
@@ -1571,9 +2338,12 @@ class PriceEstimateScreen extends StatelessWidget {
 
                   const SizedBox(height: 15),
 
-                  const Text(
-                    'Estimated Value',
-                    style: TextStyle(
+                  Text(
+                    AppLanguage.get(
+                      'Estimated Value',
+                      'अनुमानित कीमत',
+                    ),
+                    style: const TextStyle(
                       color: grayColor,
                       fontSize: 15,
                     ),
@@ -1583,7 +2353,6 @@ class PriceEstimateScreen extends StatelessWidget {
 
                   Text(
                     '₹${estimatedValue.toStringAsFixed(0)}',
-
                     style: const TextStyle(
                       color: darkGreen,
                       fontSize: 38,
@@ -1596,22 +2365,18 @@ class PriceEstimateScreen extends StatelessWidget {
 
             const SizedBox(height: 25),
 
-            // ==================================================
-            // PHOTO CONFIRMATION
-            // ==================================================
+            // =========================
+            // SCRAP PHOTO
+            // =========================
 
             if (selectedPhoto != null)
               Container(
                 width: double.infinity,
-
                 padding: const EdgeInsets.all(12),
 
                 decoration: BoxDecoration(
                   color: Colors.white,
-
-                  borderRadius:
-                      BorderRadius.circular(16),
-
+                  borderRadius: BorderRadius.circular(16),
                   border: Border.all(
                     color: const Color(0xFFE2E8F0),
                   ),
@@ -1619,27 +2384,46 @@ class PriceEstimateScreen extends StatelessWidget {
 
                 child: Row(
                   children: [
-
                     ClipRRect(
                       borderRadius:
                           BorderRadius.circular(10),
 
-                      child: Image.file(
-                        File(selectedPhoto!.path),
+                      child: FutureBuilder<Uint8List>(
+                        future:
+                            selectedPhoto!.readAsBytes(),
 
-                        width: 70,
-                        height: 70,
+                        builder:
+                            (context, snapshot) {
+                          if (snapshot.hasData) {
+                            return Image.memory(
+                              snapshot.data!,
+                              width: 70,
+                              height: 70,
+                              fit: BoxFit.cover,
+                            );
+                          }
 
-                        fit: BoxFit.cover,
+                          return const SizedBox(
+                            width: 70,
+                            height: 70,
+                            child: Center(
+                              child:
+                                  CircularProgressIndicator(),
+                            ),
+                          );
+                        },
                       ),
                     ),
 
                     const SizedBox(width: 12),
 
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        'Scrap photo added successfully',
-                        style: TextStyle(
+                        AppLanguage.get(
+                          'Scrap photo added successfully',
+                          'स्क्रैप की फोटो सफलतापूर्वक जोड़ दी गई',
+                        ),
+                        style: const TextStyle(
                           color: darkGreen,
                           fontWeight:
                               FontWeight.w600,
@@ -1657,31 +2441,49 @@ class PriceEstimateScreen extends StatelessWidget {
 
             const SizedBox(height: 20),
 
-            // ==================================================
-            // DETAILS
-            // ==================================================
+            // =========================
+            // SCRAP DETAILS
+            // =========================
 
             InfoRow(
-              label: 'Material',
+              label: AppLanguage.get(
+                'Material',
+                'मटेरियल',
+              ),
               value: material,
             ),
 
             InfoRow(
-              label: 'Weight',
+              label: AppLanguage.get(
+                'Weight',
+                'वजन',
+              ),
               value:
                   '${weight.toStringAsFixed(1)} kg',
             ),
 
             InfoRow(
-              label: 'Rate',
-              value: '₹$rate/kg',
+              label: AppLanguage.get(
+                'Rate',
+                'दर',
+              ),
+              value:
+                  '₹${rate.toStringAsFixed(2)}/kg',
+            ),
+
+            InfoRow(
+              label: AppLanguage.get(
+                'City',
+                'शहर',
+              ),
+              value: city,
             ),
 
             const Spacer(),
 
-            // ==================================================
-            // FIND RECYCLER
-            // ==================================================
+            // =========================
+            // FIND RECYCLER BUTTON
+            // =========================
 
             SizedBox(
               width: double.infinity,
@@ -1691,16 +2493,15 @@ class PriceEstimateScreen extends StatelessWidget {
                 onPressed: () {
                   Navigator.push(
                     context,
-
                     MaterialPageRoute(
                       builder: (_) =>
                           RecyclerMatchingScreen(
+                        city: city,
+                        rate: rate,
                         material: material,
                         weight: weight,
                         estimatedValue:
                             estimatedValue,
-
-                        // Pass photo forward
                         selectedPhoto:
                             selectedPhoto,
                       ),
@@ -1712,7 +2513,6 @@ class PriceEstimateScreen extends StatelessWidget {
                     ElevatedButton.styleFrom(
                   backgroundColor:
                       primaryGreen,
-
                   foregroundColor:
                       Colors.white,
 
@@ -1723,10 +2523,13 @@ class PriceEstimateScreen extends StatelessWidget {
                   ),
                 ),
 
-                child: const Text(
-                  'Find Recycler',
+                child: Text(
+                  AppLanguage.get(
+                    'Find Recycler',
+                    'रीसाइक्लर खोजें',
+                  ),
 
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 16,
                     fontWeight:
                         FontWeight.bold,
@@ -1740,7 +2543,6 @@ class PriceEstimateScreen extends StatelessWidget {
     );
   }
 }
-
 // ============================================================
 // INFO ROW
 // ============================================================
@@ -1778,7 +2580,9 @@ class InfoRow extends StatelessWidget {
               color: grayColor,
             ),
           ),
+
           const Spacer(),
+
           Text(
             value,
             style: const TextStyle(
@@ -1791,60 +2595,190 @@ class InfoRow extends StatelessWidget {
     );
   }
 }
-
 // ============================================================
-// RECYCLER MATCHING SCREEN
+// RECYCLER MATCHING SCREEN - ONLINE + OFFLINE
 // ============================================================
 
-class RecyclerMatchingScreen extends StatelessWidget {
+class RecyclerMatchingScreen extends StatefulWidget {
+  final String city;
   final String material;
   final double weight;
+  final double rate;
   final double estimatedValue;
   final XFile? selectedPhoto;
 
   const RecyclerMatchingScreen({
     super.key,
     required this.material,
+    required this.city,
     required this.weight,
+    required this.rate,
     required this.estimatedValue,
     this.selectedPhoto,
   });
-  final List<Map<String, dynamic>> recyclers = const [
-    {
-      'name': 'GreenTech Recycling Center',
-      'distance': '3.2 km',
-      'rate': 27,
-      'available': true,
-    },
-    {
-      'name': 'EcoCycle Recycling',
-      'distance': '5.8 km',
-      'rate': 26,
-      'available': true,
-    },
-    {
-      'name': 'Clean Earth Recycling',
-      'distance': '7.1 km',
-      'rate': 25,
-      'available': false,
-    },
-  ];
+
+  @override
+  State<RecyclerMatchingScreen> createState() =>
+      _RecyclerMatchingScreenState();
+}
+
+class _RecyclerMatchingScreenState
+    extends State<RecyclerMatchingScreen> {
+
+  bool isLoading = true;
+  bool isOfflineData = false;
+
+  List<Map<String, dynamic>> recyclers = [];
+
+  @override
+  void initState() {
+    super.initState();
+    loadRecyclers();
+  }
+
+  // ==========================================================
+  // LOAD RECYCLERS - ONLINE + OFFLINE CACHE
+  // ==========================================================
+
+  Future<void> loadRecyclers() async {
+    setState(() {
+      isLoading = true;
+      isOfflineData = false;
+    });
+
+    try {
+      // ======================================================
+      // 1. TRY FIRESTORE FIRST
+      // ======================================================
+
+      final snapshot = await FirebaseFirestore.instance
+          .collection('recyclers')
+          .get();
+
+      final onlineRecyclers = snapshot.docs.map((doc) {
+        final data = doc.data();
+
+        return <String, dynamic>{
+          ...data,
+          'documentId': doc.id,
+        };
+      }).toList();
+
+      // ======================================================
+      // 2. SAVE FIRESTORE DATA TO LOCAL CACHE
+      // ======================================================
+
+      if (onlineRecyclers.isNotEmpty) {
+        await OfflineStorage.saveRecyclers(
+          onlineRecyclers,
+        );
+      }
+
+      // ======================================================
+      // 3. FILTER CITY
+      // ======================================================
+
+      final filteredRecyclers =
+          onlineRecyclers.where((recycler) {
+        final recyclerCity =
+            recycler['city']?.toString().trim();
+
+        if (recyclerCity == null ||
+            recyclerCity.isEmpty) {
+          return false;
+        }
+
+        return recyclerCity.toLowerCase() ==
+            widget.city.toLowerCase();
+      }).toList();
+
+      if (!mounted) return;
+
+      setState(() {
+        recyclers = filteredRecyclers;
+        isLoading = false;
+        isOfflineData = false;
+      });
+
+      return;
+    } catch (e) {
+      // ======================================================
+      // 4. FIRESTORE FAILED -> USE LOCAL CACHE
+      // ======================================================
+
+      try {
+        final cachedRecyclers =
+            await OfflineStorage.getRecyclers();
+
+        final filteredCachedRecyclers =
+            cachedRecyclers.where((recycler) {
+          final recyclerCity =
+              recycler['city']?.toString().trim();
+
+          if (recyclerCity == null ||
+              recyclerCity.isEmpty) {
+            return false;
+          }
+
+          return recyclerCity.toLowerCase() ==
+              widget.city.toLowerCase();
+        }).toList();
+
+        if (!mounted) return;
+
+        setState(() {
+          recyclers = filteredCachedRecyclers;
+          isLoading = false;
+          isOfflineData = true;
+        });
+
+        return;
+      } catch (_) {
+        // Local cache also failed.
+      }
+
+      // ======================================================
+      // 5. NOTHING AVAILABLE
+      // ======================================================
+
+      if (!mounted) return;
+
+      setState(() {
+        recyclers = [];
+        isLoading = false;
+        isOfflineData = true;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Verified Recyclers'),
+        title: Text(
+          AppLanguage.get(
+            'Verified Recyclers',
+            'सत्यापित रीसाइक्लर',
+          ),
+        ),
       ),
+
       body: ListView(
         padding: const EdgeInsets.all(20),
+
         children: [
+          // ==================================================
+          // SCRAP SUMMARY
+          // ==================================================
+
           Container(
             padding: const EdgeInsets.all(18),
+
             decoration: BoxDecoration(
               color: lightGreen,
               borderRadius: BorderRadius.circular(18),
             ),
+
             child: Row(
               children: [
                 const Icon(
@@ -1852,10 +2786,14 @@ class RecyclerMatchingScreen extends StatelessWidget {
                   color: darkGreen,
                   size: 35,
                 ),
+
                 const SizedBox(width: 12),
+
                 Expanded(
                   child: Text(
-                    '$material • ${weight.toStringAsFixed(1)} kg',
+                    '${widget.material} • '
+                    '${widget.weight.toStringAsFixed(1)} kg',
+
                     style: const TextStyle(
                       color: darkGreen,
                       fontWeight: FontWeight.bold,
@@ -1866,152 +2804,437 @@ class RecyclerMatchingScreen extends StatelessWidget {
             ),
           ),
 
+          const SizedBox(height: 12),
+
+          // ==================================================
+          // SELECTED CITY
+          // ==================================================
+
+          Row(
+            children: [
+              const Icon(
+                Icons.location_on_outlined,
+                size: 18,
+                color: grayColor,
+              ),
+
+              const SizedBox(width: 6),
+
+              Text(
+                AppLanguage.get(
+                  'Location: ${widget.city}',
+                  'स्थान: ${widget.city}',
+                ),
+
+                style: const TextStyle(
+                  color: grayColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+
           const SizedBox(height: 20),
 
-          const Text(
-            'Matching recyclers',
-            style: TextStyle(
+          // ==================================================
+          // HEADING
+          // ==================================================
+
+          Text(
+            AppLanguage.get(
+              'Matching Recyclers',
+              'मैचिंग रीसाइक्लर',
+            ),
+
+            style: const TextStyle(
               color: textColor,
               fontSize: 21,
               fontWeight: FontWeight.bold,
             ),
           ),
 
+          const SizedBox(height: 6),
+
+          Text(
+            AppLanguage.get(
+              'Verified recyclers available in ${widget.city}',
+              '${widget.city} में उपलब्ध सत्यापित रीसाइक्लर',
+            ),
+
+            style: const TextStyle(
+              color: grayColor,
+              fontSize: 14,
+            ),
+          ),
+
           const SizedBox(height: 15),
 
-          ...recyclers.map(
-            (recycler) {
-              return Container(
-                margin: const EdgeInsets.only(bottom: 15),
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(
-                    color: const Color(0xFFE2E8F0),
-                  ),
+          // ==================================================
+          // OFFLINE CACHE INDICATOR
+          // ==================================================
+
+          if (isOfflineData && !isLoading)
+            Container(
+              margin: const EdgeInsets.only(bottom: 15),
+
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 10,
+              ),
+
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7ED),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: const Color(0xFFFED7AA),
                 ),
-                child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: lightGreen,
-                            borderRadius:
-                                BorderRadius.circular(14),
+              ),
+
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.cloud_off,
+                    color: Colors.orange,
+                    size: 20,
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  Expanded(
+                    child: Text(
+                      AppLanguage.get(
+                        'Showing saved recycler data (Offline)',
+                        'सेव किया हुआ रीसाइक्लर डेटा दिखाया जा रहा है (ऑफलाइन)',
+                      ),
+
+                      style: const TextStyle(
+                        color: Colors.orange,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // ==================================================
+          // LOADING
+          // ==================================================
+
+          if (isLoading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(30),
+                child: CircularProgressIndicator(),
+              ),
+            )
+
+          // ==================================================
+          // NO MATCHING RECYCLER
+          // ==================================================
+
+          else if (recyclers.isEmpty)
+            Container(
+              width: double.infinity,
+
+              padding: const EdgeInsets.all(20),
+
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(
+                  color: const Color(0xFFE2E8F0),
+                ),
+              ),
+
+              child: Column(
+                children: [
+                  const Icon(
+                    Icons.location_off_outlined,
+                    color: grayColor,
+                    size: 45,
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  Text(
+                    AppLanguage.get(
+                      'No matching recycler found in ${widget.city}.',
+                      '${widget.city} में कोई मैचिंग रीसाइक्लर नहीं मिला।',
+                    ),
+
+                    textAlign: TextAlign.center,
+
+                    style: const TextStyle(
+                      color: textColor,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Text(
+                    AppLanguage.get(
+                      'Please try another city.',
+                      'कृपया कोई दूसरा शहर चुनें।',
+                    ),
+
+                    textAlign: TextAlign.center,
+
+                    style: const TextStyle(
+                      color: grayColor,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            )
+
+          // ==================================================
+          // RECYCLER CARDS
+          // ==================================================
+
+          else
+            Column(
+              children: recyclers.map((recycler) {
+                final name =
+                    recycler['name'] ??
+                        'Recycler';
+
+                final address =
+                    recycler['address'] ??
+                        'Address not available';
+
+                final activity =
+                    recycler['activity'] ??
+                        'E-waste recycling';
+
+                final status =
+                    recycler['registrationStatus'] ??
+                        'Status not available';
+
+                return Container(
+                  margin: const EdgeInsets.only(
+                    bottom: 15,
+                  ),
+
+                  padding: const EdgeInsets.all(18),
+
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius:
+                        BorderRadius.circular(18),
+
+                    border: Border.all(
+                      color: const Color(0xFFE2E8F0),
+                    ),
+                  ),
+
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+
+                    children: [
+                      // ======================================
+                      // RECYCLER NAME
+                      // ======================================
+
+                      Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+
+                            decoration: BoxDecoration(
+                              color: lightGreen,
+                              borderRadius:
+                                  BorderRadius.circular(14),
+                            ),
+
+                            child: const Icon(
+                              Icons.business,
+                              color: primaryGreen,
+                            ),
                           ),
-                          child: const Icon(
-                            Icons.business,
-                            color: primaryGreen,
+
+                          const SizedBox(width: 12),
+
+                          Expanded(
+                            child: Text(
+                              name.toString(),
+
+                              style:
+                                  const TextStyle(
+                                color: textColor,
+                                fontWeight:
+                                    FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
                           ),
+
+                          const Icon(
+                            Icons.verified,
+                            color: blueColor,
+                            size: 22,
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 15),
+
+                      // ======================================
+                      // ADDRESS
+                      // ======================================
+
+                      Row(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+
+                        children: [
+                          const Icon(
+                            Icons.location_on_outlined,
+                            size: 18,
+                            color: grayColor,
+                          ),
+
+                          const SizedBox(width: 5),
+
+                          Expanded(
+                            child: Text(
+                              address.toString(),
+
+                              style:
+                                  const TextStyle(
+                                color: grayColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 10),
+
+                      // ======================================
+                      // ACTIVITY
+                      // ======================================
+
+                      Text(
+                        AppLanguage.get(
+                          'Activity: ${activity.toString()}',
+                          'कार्य: ${activity.toString()}',
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
+
+                        style: const TextStyle(
+                          color: grayColor,
+                        ),
+                      ),
+
+                      const SizedBox(height: 8),
+
+                      // ======================================
+                      // STATUS
+                      // ======================================
+
+                      Text(
+                        AppLanguage.get(
+                          'Status: ${status.toString()}',
+                          'स्थिति: ${status.toString()}',
+                        ),
+
+                        style: const TextStyle(
+                          color: grayColor,
+                        ),
+                      ),
+
+                      const SizedBox(height: 15),
+
+                      // ======================================
+                      // SELECT RECYCLER
+                      // ======================================
+
+                      SizedBox(
+                        width: double.infinity,
+                        height: 45,
+
+                        child: ElevatedButton(
+                          onPressed: () {
+                            Navigator.push(
+                              context,
+
+                              MaterialPageRoute(
+                                builder: (_) =>
+                                    LotHandoverScreen(
+                                  material:
+                                      widget.material,
+
+                                  weight:
+                                      widget.weight,
+
+                                  rate:
+                                      widget.rate,
+
+                                  recyclerId:
+                                      recycler[
+                                              'recyclerId']
+                                          ?.toString() ??
+                                      '',
+
+                                  recyclerName:
+                                      recycler['name']
+                                              ?.toString() ??
+                                          'Recycler',
+
+                                  recyclerCity:
+                                      recycler['city']
+                                              ?.toString() ??
+                                          widget.city,
+                                ),
+                              ),
+                            );
+                          },
+
+                          style:
+                              ElevatedButton.styleFrom(
+                            backgroundColor:
+                                primaryGreen,
+
+                            foregroundColor:
+                                Colors.white,
+
+                            shape:
+                                RoundedRectangleBorder(
+                              borderRadius:
+                                  BorderRadius.circular(12),
+                            ),
+                          ),
+
                           child: Text(
-                            recycler['name'],
+                            AppLanguage.get(
+                              'Select Recycler',
+                              'रीसाइक्लर चुनें',
+                            ),
+
                             style: const TextStyle(
-                              color: textColor,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
+                              fontSize: 15,
+                              fontWeight:
+                                  FontWeight.bold,
                             ),
                           ),
                         ),
-                        const Icon(
-                          Icons.verified,
-                          color: blueColor,
-                          size: 22,
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 15),
-
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.location_on_outlined,
-                          size: 18,
-                          color: grayColor,
-                        ),
-                        const SizedBox(width: 5),
-                        Text(
-                          recycler['distance'],
-                          style: const TextStyle(
-                            color: grayColor,
-                          ),
-                        ),
-                        const SizedBox(width: 20),
-                        const Icon(
-                          Icons.currency_rupee,
-                          size: 18,
-                          color: grayColor,
-                        ),
-                        Text(
-                          '${recycler['rate']}/kg',
-                          style: const TextStyle(
-                            color: grayColor,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 15),
-
-                    SizedBox(
-                      width: double.infinity,
-                      height: 45,
-                      child: ElevatedButton(
-                        onPressed:
-                            recycler['available'] == true
-                                ? () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            LotHandoverScreen(
-                                          material: material,
-                                          weight: weight,
-                                          rate: recycler[
-                                              'rate'],
-                                          recyclerName:
-                                              recycler[
-                                                  'name'],
-                                        ),
-                                      ),
-                                    );
-                                  }
-                                : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: primaryGreen,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius:
-                                BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: Text(
-                          recycler['available'] == true
-                              ? 'Select Recycler'
-                              : 'Currently Unavailable',
-                        ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
         ],
       ),
     );
   }
 }
-
 // ============================================================
 // LOT + HANDOVER SCREEN
 // ============================================================
@@ -2019,15 +3242,19 @@ class RecyclerMatchingScreen extends StatelessWidget {
 class LotHandoverScreen extends StatefulWidget {
   final String material;
   final double weight;
-  final int rate;
+  final double rate;
+  final String recyclerId;
   final String recyclerName;
+  final String recyclerCity;
 
   const LotHandoverScreen({
     super.key,
     required this.material,
     required this.weight,
     required this.rate,
+    required this.recyclerId,
     required this.recyclerName,
+    required this.recyclerCity,
   });
 
   @override
@@ -2047,92 +3274,177 @@ class _LotHandoverScreenState
     final now = DateTime.now();
 
     return 'KC-${now.year}-'
-        '${now.millisecondsSinceEpoch.toString().substring(7)}';
+        '${now.millisecondsSinceEpoch}';
   }
 
   // ==========================================================
-  // COMPLETE HANDOVER
-  // ==========================================================
+// COMPLETE HANDOVER - ONLINE + OFFLINE
+// ==========================================================
 
-  Future<void> completeHandover() async {
-    final user = FirebaseAuth.instance.currentUser;
+Future<void> completeHandover() async {
+  if (saving) return;
 
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please login again.'),
-        ),
-      );
-      return;
-    }
+  setState(() {
+    saving = true;
+  });
 
-    setState(() {
-      saving = true;
+  final lotId = createLotId();
+
+  final estimatedValue =
+      widget.weight * widget.rate;
+
+  final handoverDateTime = DateTime.now();
+
+  // Unique transaction ID
+  final transactionId =
+      'TX-${DateTime.now().millisecondsSinceEpoch}';
+
+  // ========================================================
+  // TRANSACTION DATA
+  // ========================================================
+
+  final transactionData = <String, dynamic>{
+    'transactionId': transactionId,
+    'lotId': lotId,
+
+    'material': widget.material,
+    'weight': widget.weight,
+    'rate': widget.rate,
+    'estimatedValue': estimatedValue,
+
+    'recyclerId': widget.recyclerId,
+    'recyclerName': widget.recyclerName,
+    'recyclerCity': widget.recyclerCity,
+
+    'status': 'Handover Record Created',
+
+    // Store as String for local storage compatibility
+    'handoverDateTime':
+        handoverDateTime.toIso8601String(),
+
+    'createdAt':
+        handoverDateTime.toIso8601String(),
+  };
+
+  try {
+    // ======================================================
+    // 1. TRY FIRESTORE
+    // ======================================================
+
+    await FirebaseFirestore.instance
+        .collection('transactions')
+        .doc(transactionId)
+        .set({
+      'transactionId': transactionId,
+      'lotId': lotId,
+
+      'material': widget.material,
+      'weight': widget.weight,
+      'rate': widget.rate,
+      'estimatedValue': estimatedValue,
+
+      'recyclerId': widget.recyclerId,
+      'recyclerName': widget.recyclerName,
+      'recyclerCity': widget.recyclerCity,
+
+      'status': 'Handover Record Created',
+
+      'createdAt':
+          FieldValue.serverTimestamp(),
+
+      'handoverDateTime':
+          Timestamp.fromDate(handoverDateTime),
     });
 
-    final lotId = createLotId();
+    // ======================================================
+    // ONLINE SUCCESS
+    // ======================================================
 
-    final estimatedValue =
-        widget.weight * widget.rate;
+    if (!mounted) return;
 
-    // Current date and time
-    final handoverDateTime = DateTime.now();
+    setState(() {
+      saving = false;
+    });
+
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DigitalReceiptScreen(
+          lotId: lotId,
+          material: widget.material,
+          weight: widget.weight,
+          rate: widget.rate,
+          estimatedValue: estimatedValue,
+          recyclerId: widget.recyclerId,
+          recyclerName: widget.recyclerName,
+          recyclerCity: widget.recyclerCity,
+          handoverDateTime:
+              handoverDateTime,
+        ),
+      ),
+      (route) => route.isFirst,
+    );
+  } catch (e) {
+    // ======================================================
+    // 2. FIRESTORE FAILED
+    //    SAVE TRANSACTION LOCALLY
+    // ======================================================
 
     try {
-      // ======================================================
-      // SAVE TRANSACTION TO FIRESTORE
-      // ======================================================
-
-      await FirebaseFirestore.instance
-          .collection('transactions')
-          .add({
-        'userId': user.uid,
-
-        'lotId': lotId,
-
-        'material': widget.material,
-
-        'weight': widget.weight,
-
-        'rate': widget.rate,
-
-        'estimatedValue': estimatedValue,
-
-        'recyclerName': widget.recyclerName,
-
-        'status': 'Completed',
-
-        // Server timestamp
-        'createdAt': FieldValue.serverTimestamp(),
-
-        // Handover date and time
-        'handoverDateTime':
-            Timestamp.fromDate(handoverDateTime),
-      });
+      await OfflineStorage.savePendingTransaction(
+        transactionData,
+      );
 
       if (!mounted) return;
 
-      // ======================================================
-      // OPEN DIGITAL RECEIPT
-      // ======================================================
+      setState(() {
+        saving = false;
+      });
+
+      // ====================================================
+      // OFFLINE RECEIPT
+      // ====================================================
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLanguage.get(
+              'No internet. Transaction saved offline and will sync later.',
+              'इंटरनेट नहीं है। लेनदेन ऑफलाइन सेव हो गया है और बाद में सिंक होगा।',
+            ),
+          ),
+          duration:
+              const Duration(seconds: 3),
+        ),
+      );
 
       Navigator.pushAndRemoveUntil(
         context,
-
         MaterialPageRoute(
           builder: (_) => DigitalReceiptScreen(
             lotId: lotId,
             material: widget.material,
             weight: widget.weight,
             rate: widget.rate,
-            estimatedValue: estimatedValue,
-            recyclerName: widget.recyclerName,
+            estimatedValue:
+                estimatedValue,
+            recyclerId:
+                widget.recyclerId,
+            recyclerName:
+                widget.recyclerName,
+            recyclerCity:
+                widget.recyclerCity,
+            handoverDateTime:
+                handoverDateTime,
           ),
         ),
-
         (route) => route.isFirst,
       );
-    } catch (e) {
+    } catch (localError) {
+      // ====================================================
+      // LOCAL SAVE ALSO FAILED
+      // ====================================================
+
       if (!mounted) return;
 
       setState(() {
@@ -2142,12 +3454,16 @@ class _LotHandoverScreenState
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Transaction could not be saved: $e',
+            AppLanguage.get(
+              'Transaction could not be saved.',
+              'लेनदेन सेव नहीं हो सका।',
+            ),
           ),
         ),
       );
     }
   }
+}
 
   // ==========================================================
   // BUILD
@@ -2171,7 +3487,12 @@ class _LotHandoverScreenState
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Digital Handover'),
+        title: Text(
+          AppLanguage.get(
+            'Digital Handover',
+            'डिजिटल हैंडओवर',
+          ),
+        ),
       ),
 
       body: Padding(
@@ -2182,14 +3503,17 @@ class _LotHandoverScreenState
               CrossAxisAlignment.start,
 
           children: [
-
             // ==================================================
-            // TITLE
+            // HEADING
             // ==================================================
 
-            const Text(
-              'Confirm Handover',
-              style: TextStyle(
+            Text(
+              AppLanguage.get(
+                'Confirm Handover',
+                'हैंडओवर की पुष्टि करें',
+              ),
+
+              style: const TextStyle(
                 color: textColor,
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
@@ -2198,9 +3522,13 @@ class _LotHandoverScreenState
 
             const SizedBox(height: 8),
 
-            const Text(
-              'Review the transaction before creating the digital record.',
-              style: TextStyle(
+            Text(
+              AppLanguage.get(
+                'Review the transaction before creating the digital record.',
+                'डिजिटल रिकॉर्ड बनाने से पहले लेनदेन की जानकारी जांचें।',
+              ),
+
+              style: const TextStyle(
                 color: grayColor,
               ),
             ),
@@ -2213,7 +3541,6 @@ class _LotHandoverScreenState
 
             Container(
               width: double.infinity,
-
               padding: const EdgeInsets.all(17),
 
               decoration: BoxDecoration(
@@ -2224,7 +3551,6 @@ class _LotHandoverScreenState
 
               child: Row(
                 children: [
-
                   const Icon(
                     Icons.qr_code_2,
                     color: darkGreen,
@@ -2239,9 +3565,13 @@ class _LotHandoverScreenState
                           CrossAxisAlignment.start,
 
                       children: [
-                        const Text(
-                          'Digital Lot ID',
-                          style: TextStyle(
+                        Text(
+                          AppLanguage.get(
+                            'Digital Lot ID',
+                            'डिजिटल लॉट ID',
+                          ),
+
+                          style: const TextStyle(
                             color: darkGreen,
                             fontSize: 12,
                             fontWeight:
@@ -2252,7 +3582,11 @@ class _LotHandoverScreenState
                         const SizedBox(height: 3),
 
                         Text(
-                          'Created after confirmation',
+                          AppLanguage.get(
+                            'Will be: ${createLotId()}',
+                            'होगा: ${createLotId()}',
+                          ),
+
                           style: const TextStyle(
                             color: darkGreen,
                             fontSize: 14,
@@ -2277,12 +3611,10 @@ class _LotHandoverScreenState
               child: SingleChildScrollView(
                 child: Container(
                   width: double.infinity,
-
                   padding: const EdgeInsets.all(20),
 
                   decoration: BoxDecoration(
                     color: Colors.white,
-
                     borderRadius:
                         BorderRadius.circular(18),
 
@@ -2294,76 +3626,110 @@ class _LotHandoverScreenState
 
                   child: Column(
                     children: [
-
                       InfoRow(
-                        label: 'Material',
+                        label: AppLanguage.get(
+                          'Material',
+                          'मटेरियल',
+                        ),
                         value: widget.material,
                       ),
 
                       InfoRow(
-                        label: 'Weight',
+                        label: AppLanguage.get(
+                          'Weight',
+                          'वजन',
+                        ),
                         value:
                             '${widget.weight.toStringAsFixed(1)} kg',
                       ),
 
                       InfoRow(
-                        label: 'Rate',
+                        label: AppLanguage.get(
+                          'Rate',
+                          'दर',
+                        ),
                         value:
-                            '₹${widget.rate}/kg',
+                            '₹${widget.rate.toStringAsFixed(2)}/kg',
                       ),
 
                       InfoRow(
-                        label: 'Recycler',
+                        label: AppLanguage.get(
+                          'Recycler',
+                          'रीसाइक्लर',
+                        ),
                         value:
                             widget.recyclerName,
                       ),
 
                       InfoRow(
-                        label: 'Estimated Value',
+                        label: AppLanguage.get(
+                          'Recycler City',
+                          'रीसाइक्लर शहर',
+                        ),
+                        value:
+                            widget.recyclerCity,
+                      ),
+
+                      InfoRow(
+                        label: AppLanguage.get(
+                          'Estimated Value',
+                          'अनुमानित कीमत',
+                        ),
                         value:
                             '₹${estimatedValue.toStringAsFixed(0)}',
                       ),
 
                       InfoRow(
-                        label: 'Date',
+                        label: AppLanguage.get(
+                          'Date',
+                          'दिनांक',
+                        ),
                         value: dateText,
                       ),
 
                       InfoRow(
-                        label: 'Time',
+                        label: AppLanguage.get(
+                          'Time',
+                          'समय',
+                        ),
                         value: timeText,
                       ),
 
                       const SizedBox(height: 15),
 
+                      // ========================================
                       // STATUS
+                      // ========================================
+
                       Container(
                         width: double.infinity,
-
                         padding:
                             const EdgeInsets.all(14),
 
                         decoration: BoxDecoration(
                           color: lightGreen,
-
                           borderRadius:
                               BorderRadius.circular(12),
                         ),
 
-                        child: const Row(
+                        child: Row(
                           children: [
-
-                            Icon(
+                            const Icon(
                               Icons.verified,
                               color: darkGreen,
                             ),
 
-                            SizedBox(width: 10),
+                            const SizedBox(width: 10),
 
                             Expanded(
                               child: Text(
-                                'Status: Ready for digital handover',
-                                style: TextStyle(
+                                AppLanguage.get(
+                                  'Status: Ready for digital handover',
+                                  'स्थिति: डिजिटल हैंडओवर के लिए तैयार',
+                                ),
+
+                                style:
+                                    const TextStyle(
                                   color: darkGreen,
                                   fontWeight:
                                       FontWeight.bold,
@@ -2387,7 +3753,6 @@ class _LotHandoverScreenState
 
             SizedBox(
               width: double.infinity,
-
               height: 55,
 
               child: ElevatedButton(
@@ -2400,7 +3765,6 @@ class _LotHandoverScreenState
                     ElevatedButton.styleFrom(
                   backgroundColor:
                       primaryGreen,
-
                   foregroundColor:
                       Colors.white,
 
@@ -2415,18 +3779,24 @@ class _LotHandoverScreenState
                     ? const SizedBox(
                         height: 25,
                         width: 25,
+
                         child:
                             CircularProgressIndicator(
                           color: Colors.white,
                           strokeWidth: 3,
                         ),
                       )
-                    : const Text(
-                        'Confirm & Create Digital Record',
+                    : Text(
+                        AppLanguage.get(
+                          'Confirm & Create Digital Record',
+                          'पुष्टि करें और डिजिटल रिकॉर्ड बनाएं',
+                        ),
+
                         textAlign:
                             TextAlign.center,
 
-                        style: TextStyle(
+                        style:
+                            const TextStyle(
                           fontSize: 15,
                           fontWeight:
                               FontWeight.bold,
@@ -2448,9 +3818,14 @@ class DigitalReceiptScreen extends StatelessWidget {
   final String lotId;
   final String material;
   final double weight;
-  final int rate;
+  final double rate;
   final double estimatedValue;
+
+  final String recyclerId;
   final String recyclerName;
+  final String recyclerCity;
+
+  final DateTime handoverDateTime;
 
   const DigitalReceiptScreen({
     super.key,
@@ -2459,28 +3834,54 @@ class DigitalReceiptScreen extends StatelessWidget {
     required this.weight,
     required this.rate,
     required this.estimatedValue,
+    required this.recyclerId,
     required this.recyclerName,
+    required this.recyclerCity,
+    required this.handoverDateTime,
   });
 
   @override
   Widget build(BuildContext context) {
+    final dateText =
+        '${handoverDateTime.day.toString().padLeft(2, '0')}/'
+        '${handoverDateTime.month.toString().padLeft(2, '0')}/'
+        '${handoverDateTime.year}';
+
+    final timeText =
+        '${handoverDateTime.hour.toString().padLeft(2, '0')}:'
+        '${handoverDateTime.minute.toString().padLeft(2, '0')}';
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Digital Receipt'),
+        title: Text(
+          AppLanguage.get(
+            'Digital Receipt',
+            'डिजिटल रसीद',
+          ),
+        ),
       ),
+
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
+
         child: Column(
           children: [
             const SizedBox(height: 15),
 
+            // ==================================================
+            // SUCCESS ICON
+            // ==================================================
+
             Container(
               width: 80,
               height: 80,
+
               decoration: BoxDecoration(
                 color: lightGreen,
-                borderRadius: BorderRadius.circular(25),
+                borderRadius:
+                    BorderRadius.circular(25),
               ),
+
               child: const Icon(
                 Icons.check_circle,
                 color: primaryGreen,
@@ -2490,9 +3891,19 @@ class DigitalReceiptScreen extends StatelessWidget {
 
             const SizedBox(height: 18),
 
-            const Text(
-              'Transaction Completed',
-              style: TextStyle(
+            // ==================================================
+            // SUCCESS MESSAGE
+            // ==================================================
+
+            Text(
+              AppLanguage.get(
+                'Digital Record Created',
+                'डिजिटल रिकॉर्ड बन गया',
+              ),
+
+              textAlign: TextAlign.center,
+
+              style: const TextStyle(
                 color: darkGreen,
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
@@ -2501,31 +3912,53 @@ class DigitalReceiptScreen extends StatelessWidget {
 
             const SizedBox(height: 8),
 
-            const Text(
-              'Digital handover record created successfully.',
+            Text(
+              AppLanguage.get(
+                'Your handover transaction has been recorded successfully.',
+                'आपका हैंडओवर लेनदेन सफलतापूर्वक रिकॉर्ड हो गया है।',
+              ),
+
               textAlign: TextAlign.center,
-              style: TextStyle(
+
+              style: const TextStyle(
                 color: grayColor,
               ),
             ),
 
             const SizedBox(height: 25),
 
+            // ==================================================
+            // RECEIPT CARD
+            // ==================================================
+
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(22),
+
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
+                borderRadius:
+                    BorderRadius.circular(20),
+
                 border: Border.all(
-                  color: const Color(0xFFE2E8F0),
+                  color:
+                      const Color(0xFFE2E8F0),
                 ),
               ),
+
               child: Column(
                 children: [
-                  const Text(
-                    'DIGITAL LOT ID',
-                    style: TextStyle(
+                  // ==========================================
+                  // LOT ID
+                  // ==========================================
+
+                  Text(
+                    AppLanguage.get(
+                      'DIGITAL LOT ID',
+                      'डिजिटल लॉट ID',
+                    ),
+
+                    style: const TextStyle(
                       color: grayColor,
                       fontSize: 12,
                       letterSpacing: 1,
@@ -2536,67 +3969,132 @@ class DigitalReceiptScreen extends StatelessWidget {
 
                   Text(
                     lotId,
+
+                    textAlign:
+                        TextAlign.center,
+
                     style: const TextStyle(
                       color: primaryGreen,
                       fontSize: 22,
-                      fontWeight: FontWeight.bold,
+                      fontWeight:
+                          FontWeight.bold,
                     ),
                   ),
 
                   const Divider(height: 30),
 
+                  // ==========================================
+                  // TRANSACTION DETAILS
+                  // ==========================================
+
                   InfoRow(
-                    label: 'Material',
+                    label: AppLanguage.get(
+                      'Material',
+                      'मटेरियल',
+                    ),
                     value: material,
                   ),
 
                   InfoRow(
-                    label: 'Weight',
+                    label: AppLanguage.get(
+                      'Weight',
+                      'वजन',
+                    ),
                     value:
                         '${weight.toStringAsFixed(1)} kg',
                   ),
 
                   InfoRow(
-                    label: 'Rate',
-                    value: '₹$rate/kg',
+                    label: AppLanguage.get(
+                      'Rate',
+                      'दर',
+                    ),
+                    value:
+                        '₹${rate.toStringAsFixed(2)}/kg',
                   ),
 
                   InfoRow(
-                    label: 'Estimated Value',
+                    label: AppLanguage.get(
+                      'Estimated Value',
+                      'अनुमानित कीमत',
+                    ),
                     value:
                         '₹${estimatedValue.toStringAsFixed(0)}',
                   ),
 
                   InfoRow(
-                    label: 'Recycler',
+                    label: AppLanguage.get(
+                      'Recycler',
+                      'रीसाइक्लर',
+                    ),
                     value: recyclerName,
+                  ),
+
+                  InfoRow(
+                    label: AppLanguage.get(
+                      'Recycler City',
+                      'रीसाइक्लर शहर',
+                    ),
+                    value: recyclerCity,
+                  ),
+
+                  InfoRow(
+                    label: AppLanguage.get(
+                      'Date',
+                      'दिनांक',
+                    ),
+                    value: dateText,
+                  ),
+
+                  InfoRow(
+                    label: AppLanguage.get(
+                      'Time',
+                      'समय',
+                    ),
+                    value: timeText,
                   ),
 
                   const SizedBox(height: 10),
 
+                  // ==========================================
+                  // TRANSACTION STATUS
+                  // ==========================================
+
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(12),
+                    padding:
+                        const EdgeInsets.all(12),
+
                     decoration: BoxDecoration(
                       color: lightGreen,
                       borderRadius:
                           BorderRadius.circular(12),
                     ),
-                    child: const Row(
+
+                    child: Row(
                       mainAxisAlignment:
                           MainAxisAlignment.center,
+
                       children: [
-                        Icon(
+                        const Icon(
                           Icons.verified,
                           color: darkGreen,
                           size: 18,
                         ),
-                        SizedBox(width: 7),
+
+                        const SizedBox(width: 7),
+
                         Text(
-                          'Transaction Recorded',
-                          style: TextStyle(
+                          AppLanguage.get(
+                            'Transaction Recorded',
+                            'लेनदेन रिकॉर्ड हो गया',
+                          ),
+
+                          style:
+                              const TextStyle(
                             color: darkGreen,
-                            fontWeight: FontWeight.bold,
+                            fontWeight:
+                                FontWeight.bold,
                           ),
                         ),
                       ],
@@ -2608,33 +4106,52 @@ class DigitalReceiptScreen extends StatelessWidget {
 
             const SizedBox(height: 25),
 
+            // ==================================================
+            // BACK TO HOME
+            // ==================================================
+
             SizedBox(
               width: double.infinity,
               height: 52,
+
               child: ElevatedButton(
                 onPressed: () {
                   Navigator.pushAndRemoveUntil(
                     context,
+
                     MaterialPageRoute(
                       builder: (_) =>
                           const HomeScreen(),
                     ),
+
                     (route) => false,
                   );
                 },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: primaryGreen,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
+
+                style:
+                    ElevatedButton.styleFrom(
+                  backgroundColor:
+                      primaryGreen,
+                  foregroundColor:
+                      Colors.white,
+
+                  shape:
+                      RoundedRectangleBorder(
                     borderRadius:
                         BorderRadius.circular(15),
                   ),
                 ),
-                child: const Text(
-                  'Back to Home',
-                  style: TextStyle(
+
+                child: Text(
+                  AppLanguage.get(
+                    'Back to Home',
+                    'होम पर जाएं',
+                  ),
+
+                  style: const TextStyle(
                     fontSize: 16,
-                    fontWeight: FontWeight.bold,
+                    fontWeight:
+                        FontWeight.bold,
                   ),
                 ),
               ),
@@ -2645,41 +4162,55 @@ class DigitalReceiptScreen extends StatelessWidget {
     );
   }
 }
-
-// ============================================================
+ // ============================================================
 // TRANSACTION HISTORY
 // ============================================================
 
 class TransactionHistory extends StatelessWidget {
   const TransactionHistory({super.key});
 
-  @override
-  Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-
-    if (user == null) {
-      return const Center(
-        child: Text(
-          'Please login again.',
-        ),
+  String formatDate(dynamic timestamp) {
+    if (timestamp is! Timestamp) {
+      return AppLanguage.get(
+        'Date not available',
+        'दिनांक उपलब्ध नहीं है',
       );
     }
 
+    final date = timestamp.toDate();
+
+    return '${date.day.toString().padLeft(2, '0')}/'
+        '${date.month.toString().padLeft(2, '0')}/'
+        '${date.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return SafeArea(
       child: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.fromLTRB(
+          // ==================================================
+          // TITLE
+          // ==================================================
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
               20,
               20,
               20,
               10,
             ),
+
             child: Align(
               alignment: Alignment.centerLeft,
+
               child: Text(
-                'Transaction History',
-                style: TextStyle(
+                AppLanguage.get(
+                  'Transaction History',
+                  'लेनदेन इतिहास',
+                ),
+
+                style: const TextStyle(
                   color: textColor,
                   fontSize: 25,
                   fontWeight: FontWeight.bold,
@@ -2688,15 +4219,25 @@ class TransactionHistory extends StatelessWidget {
             ),
           ),
 
+          // ==================================================
+          // FIRESTORE HISTORY
+          // ==================================================
+
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
+            child: StreamBuilder<
+                QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('transactions')
                   .snapshots(),
+
               builder: (
                 context,
                 snapshot,
               ) {
+                // ==========================================
+                // LOADING
+                // ==========================================
+
                 if (snapshot.connectionState ==
                     ConnectionState.waiting) {
                   return const Center(
@@ -2706,14 +4247,28 @@ class TransactionHistory extends StatelessWidget {
                   );
                 }
 
+                // ==========================================
+                // ERROR
+                // ==========================================
+
                 if (snapshot.hasError) {
                   return Center(
                     child: Padding(
                       padding:
                           const EdgeInsets.all(20),
+
                       child: Text(
-                        'Could not load history.\n\n${snapshot.error}',
-                        textAlign: TextAlign.center,
+                        AppLanguage.get(
+                          'Could not load history.\n\n'
+                          '${snapshot.error}',
+
+                          'इतिहास लोड नहीं हो सका।\n\n'
+                          '${snapshot.error}',
+                        ),
+
+                        textAlign:
+                            TextAlign.center,
+
                         style: const TextStyle(
                           color: grayColor,
                         ),
@@ -2722,25 +4277,38 @@ class TransactionHistory extends StatelessWidget {
                   );
                 }
 
+                // ==========================================
+                // EMPTY HISTORY
+                // ==========================================
+
                 if (!snapshot.hasData ||
                     snapshot.data!.docs.isEmpty) {
-                  return const Center(
+                  return Center(
                     child: Column(
                       mainAxisAlignment:
                           MainAxisAlignment.center,
+
                       children: [
-                        Icon(
+                        const Icon(
                           Icons.receipt_long_outlined,
                           size: 65,
                           color: Color(0xFFCBD5E1),
                         ),
-                        SizedBox(height: 15),
+
+                        const SizedBox(height: 15),
+
                         Text(
-                          'No transactions yet',
-                          style: TextStyle(
+                          AppLanguage.get(
+                            'No transactions yet',
+                            'अभी कोई लेनदेन नहीं है',
+                          ),
+
+                          style:
+                              const TextStyle(
                             color: grayColor,
                             fontSize: 17,
-                            fontWeight: FontWeight.bold,
+                            fontWeight:
+                                FontWeight.bold,
                           ),
                         ),
                       ],
@@ -2748,160 +4316,206 @@ class TransactionHistory extends StatelessWidget {
                   );
                 }
 
-                final allDocs =
+                // ==========================================
+                // SORT TRANSACTIONS
+                // ==========================================
+
+                final userDocs =
                     snapshot.data!.docs.toList();
 
-                final userDocs = allDocs.where((doc) {
-                  final data =
-                      doc.data() as Map<String, dynamic>;
-
-                  return data['userId'] == user.uid;
-                }).toList();
-
+                // Latest transaction first
                 userDocs.sort((a, b) {
-                  final dataA =
-                      a.data() as Map<String, dynamic>;
-                  final dataB =
-                      b.data() as Map<String, dynamic>;
+                  final dataA = a.data();
+                  final dataB = b.data();
 
                   final timeA =
-                      dataA['createdAt']
-                          as Timestamp?;
+                      dataA['createdAt'];
 
                   final timeB =
-                      dataB['createdAt']
-                          as Timestamp?;
+                      dataB['createdAt'];
 
-                  if (timeA == null && timeB == null) {
+                  if (timeA is! Timestamp &&
+                      timeB is! Timestamp) {
                     return 0;
                   }
 
-                  if (timeA == null) {
+                  if (timeA is! Timestamp) {
                     return 1;
                   }
 
-                  if (timeB == null) {
+                  if (timeB is! Timestamp) {
                     return -1;
                   }
 
                   return timeB.compareTo(timeA);
                 });
 
-                if (userDocs.isEmpty) {
-                  return const Center(
-                    child: Column(
-                      mainAxisAlignment:
-                          MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.receipt_long_outlined,
-                          size: 65,
-                          color: Color(0xFFCBD5E1),
-                        ),
-                        SizedBox(height: 15),
-                        Text(
-                          'No transactions yet',
-                          style: TextStyle(
-                            color: grayColor,
-                            fontSize: 17,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
+                // ==========================================
+                // HISTORY LIST
+                // ==========================================
 
                 return ListView.builder(
-                  padding: const EdgeInsets.all(20),
-                  itemCount: userDocs.length,
+                  padding:
+                      const EdgeInsets.all(20),
+
+                  itemCount:
+                      userDocs.length,
+
                   itemBuilder: (
                     context,
                     index,
                   ) {
                     final data =
-                        userDocs[index].data()
-                            as Map<String, dynamic>;
+                        userDocs[index].data();
 
                     final material =
-                        data['material'] ?? 'Unknown';
+                        data['material']
+                                ?.toString() ??
+                            'Unknown';
 
                     final weight =
-                        data['weight'] ?? 0;
+                        data['weight'] is num
+                            ? (data['weight']
+                                    as num)
+                                .toDouble()
+                            : 0.0;
 
                     final value =
-                        data['estimatedValue'] ?? 0;
+                        data['estimatedValue']
+                                is num
+                            ? (data[
+                                        'estimatedValue']
+                                    as num)
+                                .toDouble()
+                            : 0.0;
 
                     final recycler =
-                        data['recyclerName'] ??
+                        data['recyclerName']
+                                ?.toString() ??
                             'Recycler';
 
+                    final recyclerCity =
+                        data['recyclerCity']
+                                ?.toString() ??
+                            AppLanguage.get(
+                              'City not available',
+                              'शहर उपलब्ध नहीं है',
+                            );
+
                     final lotId =
-                        data['lotId'] ??
-                            'No Lot ID';
+                        data['lotId']
+                                ?.toString() ??
+                            AppLanguage.get(
+                              'No Lot ID',
+                              'लॉट ID उपलब्ध नहीं है',
+                            );
+
+                    final status =
+                        data['status']
+                                ?.toString() ??
+                            'Recorded';
+
+                    final date =
+                        formatDate(
+                      data['createdAt'],
+                    );
+
+                    // ======================================
+                    // TRANSACTION CARD
+                    // ======================================
 
                     return Container(
-                      margin: const EdgeInsets.only(
+                      margin:
+                          const EdgeInsets.only(
                         bottom: 15,
                       ),
+
                       padding:
                           const EdgeInsets.all(18),
-                      decoration: BoxDecoration(
+
+                      decoration:
+                          BoxDecoration(
                         color: Colors.white,
+
                         borderRadius:
-                            BorderRadius.circular(18),
+                            BorderRadius.circular(
+                          18,
+                        ),
+
                         border: Border.all(
-                          color:
-                              const Color(0xFFE2E8F0),
+                          color: const Color(
+                            0xFFE2E8F0,
+                          ),
                         ),
                       ),
+
                       child: Column(
                         crossAxisAlignment:
                             CrossAxisAlignment.start,
+
                         children: [
+                          // ==================================
+                          // MATERIAL + VALUE
+                          // ==================================
+
                           Row(
                             children: [
                               Container(
                                 width: 48,
                                 height: 48,
+
                                 decoration:
                                     BoxDecoration(
-                                  color: lightGreen,
+                                  color:
+                                      lightGreen,
+
                                   borderRadius:
                                       BorderRadius
-                                          .circular(14),
+                                          .circular(
+                                    14,
+                                  ),
                                 ),
-                                child: const Icon(
+
+                                child:
+                                    const Icon(
                                   Icons.receipt_long,
                                   color:
                                       primaryGreen,
                                 ),
                               ),
 
-                              const SizedBox(width: 12),
+                              const SizedBox(
+                                width: 12,
+                              ),
 
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment:
                                       CrossAxisAlignment
                                           .start,
+
                                   children: [
                                     Text(
-                                      material.toString(),
+                                      material,
+
                                       style:
                                           const TextStyle(
                                         color:
                                             textColor,
                                         fontSize: 17,
                                         fontWeight:
-                                            FontWeight.bold,
+                                            FontWeight
+                                                .bold,
                                       ),
                                     ),
+
                                     const SizedBox(
                                       height: 3,
                                     ),
+
                                     Text(
-                                      lotId.toString(),
+                                      lotId,
+
                                       style:
                                           const TextStyle(
                                         color:
@@ -2914,7 +4528,8 @@ class TransactionHistory extends StatelessWidget {
                               ),
 
                               Text(
-                                '₹${value is num ? value.toStringAsFixed(0) : value}',
+                                '₹${value.toStringAsFixed(0)}',
+
                                 style:
                                     const TextStyle(
                                   color:
@@ -2927,14 +4542,29 @@ class TransactionHistory extends StatelessWidget {
                             ],
                           ),
 
-                          const SizedBox(height: 15),
+                          const SizedBox(
+                            height: 15,
+                          ),
 
                           const Divider(),
 
-                          const SizedBox(height: 10),
+                          const SizedBox(
+                            height: 10,
+                          ),
+
+                          // ==================================
+                          // WEIGHT
+                          // ==================================
 
                           Text(
-                            'Weight: $weight kg',
+                            AppLanguage.get(
+                              'Weight: '
+                              '${weight.toStringAsFixed(1)} kg',
+
+                              'वजन: '
+                              '${weight.toStringAsFixed(1)} kg',
+                            ),
+
                             style:
                                 const TextStyle(
                               color: grayColor,
@@ -2942,10 +4572,20 @@ class TransactionHistory extends StatelessWidget {
                             ),
                           ),
 
-                          const SizedBox(height: 6),
+                          const SizedBox(
+                            height: 6,
+                          ),
+
+                          // ==================================
+                          // RECYCLER
+                          // ==================================
 
                           Text(
-                            'Recycler: $recycler',
+                            AppLanguage.get(
+                              'Recycler: $recycler',
+                              'रीसाइक्लर: $recycler',
+                            ),
+
                             style:
                                 const TextStyle(
                               color: grayColor,
@@ -2953,7 +4593,55 @@ class TransactionHistory extends StatelessWidget {
                             ),
                           ),
 
-                          const SizedBox(height: 10),
+                          const SizedBox(
+                            height: 6,
+                          ),
+
+                          // ==================================
+                          // CITY
+                          // ==================================
+
+                          Text(
+                            AppLanguage.get(
+                              'City: $recyclerCity',
+                              'शहर: $recyclerCity',
+                            ),
+
+                            style:
+                                const TextStyle(
+                              color: grayColor,
+                              fontSize: 13,
+                            ),
+                          ),
+
+                          const SizedBox(
+                            height: 6,
+                          ),
+
+                          // ==================================
+                          // DATE
+                          // ==================================
+
+                          Text(
+                            AppLanguage.get(
+                              'Date: $date',
+                              'दिनांक: $date',
+                            ),
+
+                            style:
+                                const TextStyle(
+                              color: grayColor,
+                              fontSize: 13,
+                            ),
+                          ),
+
+                          const SizedBox(
+                            height: 10,
+                          ),
+
+                          // ==================================
+                          // STATUS
+                          // ==================================
 
                           Container(
                             padding:
@@ -2962,17 +4650,26 @@ class TransactionHistory extends StatelessWidget {
                               horizontal: 10,
                               vertical: 6,
                             ),
+
                             decoration:
                                 BoxDecoration(
-                              color: lightGreen,
+                              color:
+                                  lightGreen,
+
                               borderRadius:
-                                  BorderRadius.circular(
-                                      8),
+                                  BorderRadius
+                                      .circular(
+                                8,
+                              ),
                             ),
-                            child: const Text(
-                              'Completed',
-                              style: TextStyle(
-                                color: darkGreen,
+
+                            child: Text(
+                              status,
+
+                              style:
+                                  const TextStyle(
+                                color:
+                                    darkGreen,
                                 fontSize: 11,
                                 fontWeight:
                                     FontWeight.bold,
@@ -2988,6 +4685,68 @@ class TransactionHistory extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+class RecyclerUploadScreen extends StatelessWidget {
+  const RecyclerUploadScreen({super.key});
+
+  Future<void> upload() async {
+    await uploadRecyclers();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          AppLanguage.get(
+            'Recycler Data Upload',
+            'रीसाइक्लर डेटा अपलोड',
+          ),
+        ),
+      ),
+      body: Center(
+        child: ElevatedButton(
+          onPressed: () async {
+            try {
+              await upload();
+
+              if (!context.mounted) return;
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    AppLanguage.get(
+                      'Recycler uploaded successfully!',
+                      'रीसाइक्लर डेटा सफलतापूर्वक अपलोड हो गया!',
+                    ),
+                  ),
+                ),
+              );
+            } catch (e) {
+              if (!context.mounted) return;
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    AppLanguage.get(
+                      'Upload failed: $e',
+                      'अपलोड विफल रहा: $e',
+                    ),
+                  ),
+                ),
+              );
+            }
+          },
+          child: Text(
+            AppLanguage.get(
+              'UPLOAD RECYCLER DATA',
+              'रीसाइक्लर डेटा अपलोड करें',
+            ),
+          ),
+        ),
       ),
     );
   }
